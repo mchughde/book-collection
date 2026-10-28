@@ -186,8 +186,15 @@ label.field { display: flex; flex-direction: column; gap: 4px; font-size: .85rem
 .facts { font-size: .85rem; color: var(--ink-3); margin-bottom: 14px; }
 .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 10px; }
 .stars { display: inline-flex; gap: 2px; }
-.stars button { background: none; border: 0; font-size: 1.5rem; line-height: 1; padding: 2px; cursor: pointer; color: var(--line); }
-.stars button.on { color: var(--star); }
+/* Each star is two buttons, left half and right half, over a glyph filled to --fill. */
+.stars .star { position: relative; font-size: 2rem; line-height: 1; padding: 0 1px; }
+.stars .star::before { content: '★'; color: transparent; background: linear-gradient(90deg, var(--star) var(--fill), var(--line) var(--fill));
+  -webkit-background-clip: text; background-clip: text; }
+.stars .star button { position: absolute; top: 0; bottom: 0; width: 50%; background: none; border: 0; padding: 0; cursor: pointer; }
+.stars .star button:first-child { left: 0; }
+.stars .star button:last-child { right: 0; }
+.stars .star button:focus-visible { outline: 2px solid var(--star); outline-offset: -2px; }
+.read-row .year-field input { width: 5.5em; padding: 4px 8px; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin-top: 16px; }
 .panel h3 { margin-top: 0; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .reads { display: flex; flex-direction: column; gap: 8px; }

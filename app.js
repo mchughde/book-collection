@@ -105,9 +105,21 @@ function newBook(fields) {
   };
 }
 
-const finishedReads = b => (b.reads || []).filter(r => r.finished);
-const lastFinished = b => finishedReads(b).map(r => r.finished).sort().pop() || '';
-const hasRead = b => b.status === 'read' || (b.reads || []).some(r => r.finished && !r.dnf);
+// A read ends with a finish date, or just a year when the date isn't known. Blank = year unknown.
+const readYear = r => (r.finished || '').slice(0, 4) || r.year || '';
+// The read under way while a book is Reading: the latest one with no end recorded.
+const currentRead = b => {
+  if (b.status !== 'reading') return undefined;
+  const open = (b.reads || []).filter(r => !readYear(r) && !r.dnf);
+  return open.findLast(r => r.started) || open.at(-1);
+};
+// Past reads, including ones in an unknown year (no date, no year, but the book was read).
+const pastReads = b => (b.reads || []).filter(r => r !== currentRead(b) &&
+  (readYear(r) || r.dnf || b.status === 'read' || b.status === 'reading' || !r.started));
+const finishedReads = b => pastReads(b).filter(r => !r.dnf);
+const lastFinished = b => finishedReads(b).map(r => r.finished || r.year || '').sort().pop() || '';
+const hasRead = b => b.status === 'read' || finishedReads(b).length > 0;
+const validYear = y => /^\d{4}$/.test(y) && y >= '1900' && y <= String(new Date().getFullYear());
 const authorLine = b => (b.authors || []).join(', ');
 const allTags = () => [...new Set(books().flatMap(b => b.tags || []))].sort((a, b) => a.localeCompare(b));
 
@@ -332,7 +344,9 @@ function coverHtml(b, badge = '') {
   return `<div class="cover"><img src="${esc(b.coverUrl)}" alt="" loading="lazy" onerror="this.parentNode.outerHTML=this.parentNode.dataset.blank" >${badge}</div>`
     .replace('<div class="cover">', `<div class="cover" data-blank="${esc(blank)}">`);
 }
-const starsText = n => n ? '★'.repeat(n) : '';
+// Ratings go in half stars, 0.5 to 5 (0 = not rated).
+const ratingText = n => n ? Math.floor(n) + (n % 1 ? '½' : '') : '';
+const starsText = n => n ? '★'.repeat(Math.floor(n)) + (n % 1 ? '½' : '') : '';
 
 function cardHtml(b, opts = {}) {
   const badge = opts.badge ? `<span class="badge">${esc(opts.badge)}</span>` : '';
@@ -548,27 +562,36 @@ function viewReading() {
 
 function viewRead() {
   setTitle('Read');
-  const st = viewState.read ||= { source: '', q: '' };
+  const st = viewState.read ||= { source: '', q: '', year: '' };
+  // One entry per past read, so re-reads show in each year.
+  const allEntries = [];
+  for (const b of books()) {
+    const past = pastReads(b);
+    if (past.length) past.forEach(r => allEntries.push({ b, r, y: readYear(r) }));
+    else if (b.status === 'read') allEntries.push({ b, r: { finished: '', source: b.source }, y: '' });
+  }
+  const years = [...new Set(allEntries.map(e => e.y).filter(Boolean))].sort().reverse();
+  if (st.year && st.year !== 'unknown' && !years.includes(st.year)) st.year = '';
+  const UNKNOWN = 'Year unknown';
   const draw = () => {
-    // One entry per finished read, so re-reads show in each year.
-    let entries = [];
-    for (const b of books()) {
-      const fin = finishedReads(b);
-      if (fin.length) fin.forEach(r => entries.push({ b, r }));
-      else if (b.status === 'read') entries.push({ b, r: { finished: '', source: b.source } });
-    }
+    let entries = allEntries;
+    if (st.year) entries = entries.filter(e => e.y === (st.year === 'unknown' ? '' : st.year));
     if (st.source) entries = entries.filter(e => (e.r.source || e.b.source) === st.source);
     if (st.q) entries = entries.filter(e => matches(e.b, st.q));
-    entries.sort((x, y) => (y.r.finished || '').localeCompare(x.r.finished || ''));
+    // Newest first; a known year beats a date-less one within it; unknown years last.
+    const key = e => e.r.finished || (e.y ? e.y + '-00' : '');
+    entries = entries.slice().sort((x, y) => key(y).localeCompare(key(x)));
     const groups = new Map();
     for (const e of entries) {
-      const y = e.r.finished ? e.r.finished.slice(0, 4) : 'Date not recorded';
+      const y = e.y || UNKNOWN;
       if (!groups.has(y)) groups.set(y, []);
       groups.get(y).push(e);
     }
+    const finished = entries.filter(e => !e.r.dnf).length;
+    $('#shown').textContent = st.year || st.source || st.q ? `${finished} book${finished === 1 ? '' : 's'} read` : '';
     $('#grid').innerHTML = !entries.length
-      ? (books().some(hasRead) ? '<div class="empty"><p>No books match.</p></div>'
-        : emptyState('No finished books yet', 'When you finish a book, press “Finished” on its page. You can also add books you read in the past and set their dates.'))
+      ? (allEntries.length ? '<div class="empty"><p>No books match.</p></div>'
+        : emptyState('No finished books yet', 'When you finish a book, press “Finished” on its page. You can also add books you read in the past, with the year if you know it.'))
       : [...groups].map(([y, list]) => `<h2>${esc(y)} <span class="muted small">(${list.length})</span></h2>
         <div class="grid">${list.map(({ b, r }) => cardHtml(b, {
           badge: r.dnf ? 'Didn’t finish' : '',
@@ -578,10 +601,14 @@ function viewRead() {
   $('#view').innerHTML = `
     <div class="toolbar">
       <input class="search" type="search" id="q" placeholder="Search…" value="${esc(st.q)}">
+      <select id="year" aria-label="Year read"><option value="">Every year</option>${years.map(y => `<option ${st.year === y ? 'selected' : ''}>${y}</option>`).join('')}
+        ${allEntries.some(e => !e.y) ? `<option value="unknown" ${st.year === 'unknown' ? 'selected' : ''}>${UNKNOWN}</option>` : ''}</select>
       <select id="source" aria-label="Read as"><option value="">Any source</option>${SOURCES.map(([v, l]) => `<option value="${v}" ${st.source === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <span class="muted small" id="shown"></span>
     </div>
     <div id="grid"></div>`;
   $('#q').oninput = e => { st.q = e.target.value; draw(); };
+  $('#year').onchange = e => { st.year = e.target.value; draw(); };
   $('#source').onchange = e => { st.source = e.target.value; draw(); };
   draw();
 }
@@ -593,7 +620,7 @@ function viewBook(id) {
   if (!b || b.deleted) { $('#view').innerHTML = `<div class="empty"><p>That book isn’t in your collection.</p><a href="#/library">Back to library</a></div>`; setTitle('Book'); return; }
   setTitle(b.title);
   const sourceOpts = (sel, blank) => `<option value="">${blank}</option>` + SOURCES.map(([v, l]) => `<option value="${v}" ${sel === v ? 'selected' : ''}>${l}</option>`).join('');
-  const openRead = (b.reads || []).find(r => !r.finished);
+  const openRead = currentRead(b);
   const actions = [];
   if (b.status !== 'reading') actions.push(`<button class="btn primary" data-act="start">${hasRead(b) ? 'Read again' : 'Start reading'}</button>`);
   if (b.status === 'reading') actions.push(`<button class="btn primary" data-act="finish">Finished</button>`, `<button class="btn" data-act="dnf">Stopped reading</button>`);
@@ -623,7 +650,9 @@ function viewBook(id) {
           ${b.pages ? `<span class="muted small" style="padding-bottom:9px">of ${esc(b.pages)} (${percent(b)}%)</span>` : ''}</div>` : ''}
         <div class="row">${actions.join('')}</div>
         <div class="row" style="align-items:center"><span class="muted small">My rating</span>
-          <span class="stars" id="stars">${[1, 2, 3, 4, 5].map(n => `<button data-star="${n}" class="${n <= b.rating ? 'on' : ''}" aria-label="${n} star${n > 1 ? 's' : ''}">★</button>`).join('')}</span></div>
+          <span class="stars" id="stars" role="group" aria-label="My rating">${[1, 2, 3, 4, 5].map(n => `<span class="star" style="--fill:${b.rating >= n ? 100 : b.rating === n - 0.5 ? 50 : 0}%">
+            <button data-star="${n - 0.5}" aria-label="${ratingText(n - 0.5)} stars"></button><button data-star="${n}" aria-label="${n} star${n > 1 ? 's' : ''}"></button></span>`).join('')}</span>
+          <span class="muted small">${b.rating ? ratingText(b.rating) + ' of 5' : 'Tap the left half of a star for a half'}</span></div>
       </div>
     </div>
 
@@ -652,10 +681,11 @@ function viewBook(id) {
               <input type="date" data-f="started" value="${esc(r.started)}" aria-label="Started">
               <span class="muted">to</span>
               <input type="date" data-f="finished" value="${esc(r.finished)}" aria-label="Finished">
+              ${r === openRead ? '' : `<label class="small year-field">Year <input type="text" data-f="year" inputmode="numeric" maxlength="4" placeholder="Unknown" value="${esc(readYear(r))}" ${r.finished ? 'disabled title="Comes from the finish date"' : ''} aria-label="Year read"></label>`}
               <select data-f="source" aria-label="Read as">${sourceOpts(r.source, 'Read as…')}</select>
               <label class="small"><input type="checkbox" data-f="dnf" ${r.dnf ? 'checked' : ''}> didn’t finish</label>
               <button class="icon-btn" data-delread aria-label="Remove this read">×</button>
-            </div>`).join('')}</div>` : `<p class="muted small" style="margin:0">No reads recorded. ${openRead ? '' : 'Use “Start reading”, or add a past read with its dates.'}</p>`}
+            </div>`).join('')}</div>` : `<p class="muted small" style="margin:0">No reads recorded. ${openRead ? '' : 'Use “Start reading”, or add a past read. A year is enough if you don’t know the dates.'}</p>`}
         </div>
         <div class="panel">
           <h3>Shelves</h3>
@@ -721,7 +751,7 @@ function viewBook(id) {
     if (act === 'finish') { setStatus(b, 'read'); toast('Finished. Add a rating or review while it’s fresh'); }
     if (act === 'dnf') { setStatus(b, 'dnf'); }
     if (act === 'got') { b.status = 'to-read'; if (!isOwned(b)) b.source = 'own-physical'; toast('Moved to your library. Change “How I have it” if it isn’t a physical copy'); }
-    if (act === 'addread') { b.reads = [...(b.reads || []), { id: uid(), started: '', finished: '', source: b.source || '' }]; }
+    if (act === 'addread') { b.reads = [...(b.reads || []), { id: uid(), started: '', finished: '', year: '', source: b.source || '' }]; }
     if (act === 'delete') {
       if (!confirm(`Delete “${b.title}” and its notes and quotes?`)) return;
       b.deleted = true; save(); toast('Deleted'); location.hash = '#/library'; return;
@@ -732,7 +762,15 @@ function viewBook(id) {
   view.querySelectorAll('.read-row').forEach(row => {
     const r = b.reads.find(x => x.id === row.dataset.read);
     row.querySelectorAll('[data-f]').forEach(inp => inp.onchange = () => {
-      r[inp.dataset.f] = inp.type === 'checkbox' ? inp.checked : inp.value;
+      const f = inp.dataset.f;
+      if (f === 'year') {
+        const y = inp.value.trim();
+        if (y && !validYear(y)) { toast('Type a year like 2019, or leave it blank if you don’t know'); inp.value = readYear(r); return; }
+        r.year = y; save(); render(); return;
+      }
+      r[f] = inp.type === 'checkbox' ? inp.checked : inp.value;
+      // Keep the year when a finish date is cleared: the year is often all that's known.
+      if (f === 'finished') { if (r.finished) r.year = r.finished.slice(0, 4); save(); render(); return; }
       save();
     });
     row.querySelector('[data-delread]').onclick = () => {
@@ -822,13 +860,15 @@ function wireEntries(b, kind) {
 function setStatus(b, status) {
   const prev = b.status;
   b.reads = b.reads || [];
-  const open = b.reads.find(r => !r.finished);
-  if (status === 'reading' && !open) b.reads.push({ id: uid(), started: today(), finished: '', source: b.source || '' });
+  // An undated past read is not "open": only a started read left unfinished can be picked up again.
+  const open = currentRead(b) || b.reads.findLast(r => r.started && !readYear(r) && !r.dnf);
+  if (status === 'reading' && !open) b.reads.push({ id: uid(), started: today(), finished: '', year: '', source: b.source || '' });
   if ((status === 'read' || status === 'dnf') && prev === 'reading' && open) {
     open.finished = today();
+    open.year = today().slice(0, 4);
     if (status === 'dnf') open.dnf = true;
   }
-  if (status === 'read' && !b.reads.length) b.reads.push({ id: uid(), started: '', finished: '', source: b.source || '' });
+  if (status === 'read' && !b.reads.length) b.reads.push({ id: uid(), started: '', finished: '', year: '', source: b.source || '' });
   if (status !== 'reading') b.progress = '';
   b.status = status;
 }
@@ -886,6 +926,7 @@ function viewAdd(params) {
       </div>` : ''}
       <div class="row">
         <label class="field">Status<select id="a-status">${STATUSES.map(([v, l]) => `<option value="${v}" ${defaults.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="field" id="a-yearField" ${defaults.status === 'read' ? '' : 'hidden'}>Year read<input type="text" id="a-year" inputmode="numeric" maxlength="4" placeholder="Unknown" style="width:6em"></label>
         <label class="field">How I have it<select id="a-source"><option value="">Not yet / not set</option>${SOURCES.map(([v, l]) => `<option value="${v}" ${defaults.source === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         ${shelves().length ? `<label class="field">Shelf<select id="a-shelf"><option value="">None</option>${shelves().map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label>` : ''}
         <button class="btn primary" id="a-save">Add book</button>
@@ -918,8 +959,11 @@ function viewAdd(params) {
 
     if (addState.chosen) {
       $('#a-cancel').onclick = () => { addState.chosen = null; draw(); };
+      $('#a-status').onchange = e => { $('#a-yearField').hidden = e.target.value !== 'read'; };
       $('#a-save').onclick = () => {
         let c = addState.chosen;
+        const yearRead = $('#a-status').value === 'read' ? $('#a-year').value.trim() : '';
+        if (yearRead && !validYear(yearRead)) { toast('Type a year like 2019, or leave it blank if you don’t know'); $('#a-year').focus(); return; }
         if (c.manual) {
           const title = $('#m-title').value.trim();
           if (!title) { $('#m-title').focus(); return; }
@@ -932,6 +976,7 @@ function viewAdd(params) {
         }
         const b = newBook({ ...c, manual: undefined, source: $('#a-source').value, shelves: $('#a-shelf')?.value ? [$('#a-shelf').value] : [] });
         setStatus(b, $('#a-status').value);
+        if (yearRead) b.reads[0].year = yearRead;
         saveBook(b);
         addState = { q: '', results: null, chosen: null, error: '' };
         toast(`Added “${b.title}”`);
@@ -1159,14 +1204,15 @@ function viewStats() {
   setTitle('Reading stats');
   const all = books();
   const year = String(new Date().getFullYear());
-  const reads = all.flatMap(b => finishedReads(b).filter(r => !r.dnf).map(r => ({ b, r })));
-  const thisYear = reads.filter(x => x.r.finished.startsWith(year));
+  const reads = all.flatMap(b => finishedReads(b).map(r => ({ b, r })));
+  const thisYear = reads.filter(x => readYear(x.r) === year);
   const pages = thisYear.reduce((n, x) => n + (Number(x.b.pages) || 0), 0);
   const rated = all.filter(b => b.rating);
   const owned = all.filter(isOwned);
 
   const perYear = {};
-  reads.forEach(x => { const y = x.r.finished.slice(0, 4); perYear[y] = (perYear[y] || 0) + 1; });
+  reads.forEach(x => { const y = readYear(x.r); if (y) perYear[y] = (perYear[y] || 0) + 1; });
+  const unknownYear = reads.filter(x => !readYear(x.r)).length + all.filter(b => b.status === 'read' && !finishedReads(b).length).length;
   const bySource = (list) => {
     const m = {};
     list.forEach(x => { const s = SOURCE_LABEL[x.r.source || x.b.source] || 'Not recorded'; m[s] = (m[s] || 0) + 1; });
@@ -1174,8 +1220,8 @@ function viewStats() {
   };
   // Every read counts by source, dated or not.
   const allReads = all.flatMap(b => {
-    const f = (b.reads || []).filter(r => r.finished || b.status === 'read');
-    return (f.length ? f : (b.status === 'read' ? [{ source: b.source }] : [])).filter(r => !r.dnf).map(r => ({ b, r }));
+    const f = finishedReads(b);
+    return (f.length ? f : (b.status === 'read' ? [{ source: b.source }] : [])).map(r => ({ b, r }));
   });
 
   const bars = (rows, unit) => {
@@ -1196,7 +1242,7 @@ function viewStats() {
       ${tile(rated.length ? (rated.reduce((n, b) => n + b.rating, 0) / rated.length).toFixed(1) + '★' : '–', 'average rating')}
     </div>
     <h2>Books finished each year</h2>
-    ${Object.keys(perYear).length ? bars(Object.entries(perYear).sort((a, b) => b[0].localeCompare(a[0])), 'book') : '<p class="muted">No finish dates recorded yet.</p>'}
+    ${Object.keys(perYear).length || unknownYear ? bars([...Object.entries(perYear).sort((a, b) => b[0].localeCompare(a[0])), ...(unknownYear ? [['Year unknown', unknownYear]] : [])], 'book') : '<p class="muted">No finished books recorded yet.</p>'}
     <h2>How I read them, ${year}</h2>
     ${thisYear.length ? bars(bySource(thisYear), 'book') : '<p class="muted">Nothing finished this year yet.</p>'}
     <h2>How I read them, all time</h2>
