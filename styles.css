@@ -194,6 +194,8 @@ label.field { display: flex; flex-direction: column; gap: 4px; font-size: .85rem
 .stars .star button:first-child { left: 0; }
 .stars .star button:last-child { right: 0; }
 .stars .star button:focus-visible { outline: 2px solid var(--star); outline-offset: -2px; }
+.edition-field { flex: 1; min-width: 0; }
+.edition-field select { width: 100%; max-width: 34em; }
 .read-row .year-field input { width: 5.5em; padding: 4px 8px; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin-top: 16px; }
 .panel h3 { margin-top: 0; display: flex; justify-content: space-between; align-items: center; gap: 10px; }

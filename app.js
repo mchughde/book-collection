@@ -318,8 +318,8 @@ async function olSearch(query) {
   return json.docs.map(d => docToBook(d, isIsbn ? digits : ''));
 }
 
-// A title search finds the book, not a particular edition, so ISBN is only filled in
-// when it was searched or scanned (Open Library's first-listed edition is often foreign).
+// A title search finds the book, not a particular edition (its first-listed edition is often
+// foreign), so ISBN comes from the search or scan, or from the edition picked afterwards.
 function docToBook(d, isbn = '') {
   return {
     title: d.title || '',
@@ -333,6 +333,76 @@ function docToBook(d, isbn = '') {
     coverUrl: d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg`
       : isbn ? `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg?default=false` : '',
   };
+}
+
+// A work's editions, English first then French, best-guess first: ones with an ISBN, then the
+// most complete (cover, pages, publisher), print before audio, then newest. Many editions have
+// no language recorded, so the ISBN's group fills in: 978-0/1 and 979-8 English, 978-2/979-10 French.
+const editionCache = new Map();
+async function olEditions(workKey) {
+  if (editionCache.has(workKey)) return editionCache.get(workKey);
+  const res = await fetch(`https://openlibrary.org${workKey}/editions.json?limit=500`);
+  if (!res.ok) throw new Error('Open Library didn’t answer (' + res.status + ')');
+  const list = (await res.json()).entries?.map(editionFrom).filter(e => e && e.lang) || [];
+  list.sort((a, b) => b.score - a.score || b.year.localeCompare(a.year));
+  editionCache.set(workKey, list);
+  return list;
+}
+function editionFrom(e) {
+  const isbn = (e.isbn_13 || [])[0] || isbn10to13((e.isbn_10 || [])[0]);
+  if (!isbn) return null;
+  const langs = (e.languages || []).map(l => l.key);
+  const lang = langs.includes('/languages/eng') ? 'en' : langs.includes('/languages/fre') ? 'fr'
+    : langs.length ? '' : /^978[01]|^9798/.test(isbn) ? 'en' : /^9782|^97910/.test(isbn) ? 'fr' : '';
+  const format = e.physical_format || '';
+  const cover = e.covers?.[0] > 0 ? e.covers[0] : 0;
+  return {
+    isbn, lang, format,
+    publisher: (e.publishers || [])[0] || '',
+    year: (String(e.publish_date || '').match(/\d{4}/) || [''])[0],
+    pages: e.number_of_pages || '',
+    coverUrl: cover ? `https://covers.openlibrary.org/b/id/${cover}-M.jpg` : '',
+    score: (lang === 'en' ? 100 : 0) + (cover ? 4 : 0) + (e.number_of_pages ? 2 : 0) + (e.publishers ? 1 : 0)
+      - (/audio|cassette|cd|mp3/i.test(format) ? 5 : 0)
+      - (/^9798/.test(isbn) || PRINT_ON_DEMAND.test((e.publishers || [])[0] || '') ? 10 : 0),
+  };
+}
+// Self-published and print-on-demand reprints, common for classics: listed, never the best guess.
+const PRINT_ON_DEMAND = /independent|createspace|lulu|easy read|bibliolife|kessinger|forgotten books|nabu|wentworth|blurb|book on demand|books on demand|digireads|readaclassic|wildside|dodo press|echo library|general books|tredition|fq books|sheba blake/i;
+// The exact edition for a searched or scanned ISBN, for its publisher and pages.
+async function olEditionByIsbn(isbn) {
+  const res = await fetch(`https://openlibrary.org/isbn/${isbn}.json`);
+  return res.ok ? editionFrom(await res.json()) : null;
+}
+function isbn10to13(i) {
+  if (!i || !/^\d{9}[\dXx]$/.test(i)) return '';
+  const core = '978' + i.slice(0, 9);
+  const sum = [...core].reduce((n, d, k) => n + Number(d) * (k % 2 ? 3 : 1), 0);
+  return core + (10 - sum % 10) % 10;
+}
+const editionLabel = e => [e.publisher || 'Publisher not listed', e.year, e.pages && e.pages + ' pages',
+  e.format && e.format.toLowerCase(), e.lang === 'fr' && 'French'].filter(Boolean).join(' · ');
+// An edition fills in what it knows and leaves the rest (the work's cover, original year) alone.
+function applyEdition(b, e) {
+  b.isbn = e.isbn;
+  b.publisher = e.publisher;
+  if (e.pages) b.pages = e.pages;
+  if (e.coverUrl) b.coverUrl = e.coverUrl;
+}
+// A select of editions, filled in once Open Library answers. `blank` is the first option's text.
+async function fillEditionSelect(sel, workKey, blank, preselectBest) {
+  try {
+    const list = await olEditions(workKey);
+    if (!sel.isConnected) return list;
+    sel.innerHTML = `<option value="">${esc(blank)}</option>` + list.slice(0, 60).map((e, i) =>
+      `<option value="${i}" ${preselectBest && i === 0 ? 'selected' : ''}>${esc(editionLabel(e))}</option>`).join('');
+    if (!list.length) sel.innerHTML = '<option value="">Open Library lists no English or French edition with an ISBN</option>';
+    sel.disabled = !list.length;
+    return list;
+  } catch {
+    if (sel.isConnected) { sel.innerHTML = '<option value="">Couldn’t load editions. Try again later.</option>'; sel.disabled = true; }
+    return [];
+  }
 }
 
 /* ---------- covers & cards ---------- */
@@ -707,6 +777,9 @@ function viewBook(id) {
             ${detailField('year', 'Year')}${detailField('pages', 'Pages', 'numeric')}${detailField('isbn', 'ISBN', 'numeric')}
             ${detailField('publisher', 'Publisher')}${detailField('coverUrl', 'Cover image web address')}
           </div>
+          ${b.workKey ? `<div class="row" style="margin:12px 0 0" id="editionRow">
+            <button class="btn small" id="pickEdition">${b.isbn ? 'Change edition' : 'Choose edition'}</button>
+            <span class="muted small">Fills in ISBN, publisher and pages from Open Library</span></div>` : ''}
           <div class="row" style="margin:12px 0 0;justify-content:space-between">
             <span class="muted small">Added ${fmtDate(b.added)}</span>
             <button class="btn small danger" data-act="delete">Delete book</button>
@@ -732,6 +805,20 @@ function viewBook(id) {
   if (prog) prog.onchange = () => { b.progress = prog.value; save(); render(); };
   $('#review').oninput = e => { b.review = e.target.value; saveSoon(); };
   $('#review').onblur = () => saveSoon.flush();
+
+  const pick = $('#pickEdition');
+  if (pick) pick.onclick = async () => {
+    $('#editionRow').innerHTML = `<label class="field edition-field">Edition<select id="d-edition" disabled><option value="">Finding editions…</option></select></label>`;
+    const sel = $('#d-edition');
+    const list = await fillEditionSelect(sel, b.workKey, b.isbn ? 'Keep the current edition' : 'Choose one…');
+    sel.onchange = () => {
+      const e = list[sel.value];
+      if (!e) return;
+      applyEdition(b, e);
+      save(); render();
+      toast('Edition set: ' + editionLabel(e));
+    };
+  };
 
   $('#stars').onclick = e => {
     const n = Number(e.target.dataset.star);
@@ -924,6 +1011,9 @@ function viewAdd(params) {
         <label class="field">Pages<input type="text" id="m-pages" inputmode="numeric"></label>
         <label class="field">ISBN<input type="text" id="m-isbn" inputmode="numeric"></label>
       </div>` : ''}
+      ${c.workKey && !c.isbn ? `<div class="row" style="margin-bottom:4px"><label class="field edition-field">Edition
+          <select id="a-edition" disabled><option value="">Finding editions…</option></select></label></div>
+        <p class="muted small" style="margin:0 0 12px">A best guess. Pick yours if it’s listed, or scan the barcode to get the exact one.</p>` : ''}
       <div class="row">
         <label class="field">Status<select id="a-status">${STATUSES.map(([v, l]) => `<option value="${v}" ${defaults.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <label class="field" id="a-yearField" ${defaults.status === 'read' ? '' : 'hidden'}>Year read<input type="text" id="a-year" inputmode="numeric" maxlength="4" placeholder="Unknown" style="width:6em"></label>
@@ -959,9 +1049,22 @@ function viewAdd(params) {
 
     if (addState.chosen) {
       $('#a-cancel').onclick = () => { addState.chosen = null; draw(); };
+      // The chosen edition's details are added on save; meanwhile its cover shows in the form.
+      const c = addState.chosen, edSel = $('#a-edition');
+      let editions = [], exact = null;
+      const showCover = () => {
+        const e = editions[edSel.value];
+        $('#addForm .cover').outerHTML = coverHtml({ ...c, coverUrl: e?.coverUrl || c.coverUrl });
+      };
+      if (edSel) {
+        edSel.onchange = showCover;
+        fillEditionSelect(edSel, c.workKey, 'No particular edition', true).then(list => { editions = list; if (edSel.isConnected) showCover(); });
+      }
+      if (c.isbn) olEditionByIsbn(c.isbn).then(e => { exact = e; }).catch(() => {});
       $('#a-status').onchange = e => { $('#a-yearField').hidden = e.target.value !== 'read'; };
       $('#a-save').onclick = () => {
         let c = addState.chosen;
+        const edition = edSel && edSel.value !== '' ? editions[edSel.value] : exact;
         const yearRead = $('#a-status').value === 'read' ? $('#a-year').value.trim() : '';
         if (yearRead && !validYear(yearRead)) { toast('Type a year like 2019, or leave it blank if you don’t know'); $('#a-year').focus(); return; }
         if (c.manual) {
@@ -975,6 +1078,7 @@ function viewAdd(params) {
           if (dup && !confirm(`“${dup.title}” is already in your collection. Add it again anyway?`)) return;
         }
         const b = newBook({ ...c, manual: undefined, source: $('#a-source').value, shelves: $('#a-shelf')?.value ? [$('#a-shelf').value] : [] });
+        if (edition) applyEdition(b, edition);
         setStatus(b, $('#a-status').value);
         if (yearRead) b.reads[0].year = yearRead;
         saveBook(b);
