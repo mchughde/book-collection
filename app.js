@@ -339,6 +339,7 @@ function docToBook(d, isbn = '') {
 // most complete (cover, pages, publisher), print before audio, then newest. Many editions have
 // no language recorded, so the ISBN's group fills in: 978-0/1 and 979-8 English, 978-2/979-10 French.
 const editionCache = new Map();
+const editionLooked = new Set(); // books whose missing publisher was already looked up
 async function olEditions(workKey) {
   if (editionCache.has(workKey)) return editionCache.get(workKey);
   const res = await fetch(`https://openlibrary.org${workKey}/editions.json?limit=500`);
@@ -381,7 +382,7 @@ function isbn10to13(i) {
   return core + (10 - sum % 10) % 10;
 }
 const editionLabel = e => [e.publisher || 'Publisher not listed', e.year, e.pages && e.pages + ' pages',
-  e.format && e.format.toLowerCase(), e.lang === 'fr' && 'French'].filter(Boolean).join(' · ');
+  e.format && e.format.toLowerCase(), e.lang === 'fr' && 'French', 'ISBN ' + e.isbn].filter(Boolean).join(' · ');
 // An edition fills in what it knows and leaves the rest (the work's cover, original year) alone.
 function applyEdition(b, e) {
   b.isbn = e.isbn;
@@ -390,12 +391,12 @@ function applyEdition(b, e) {
   if (e.coverUrl) b.coverUrl = e.coverUrl;
 }
 // A select of editions, filled in once Open Library answers. `blank` is the first option's text.
-async function fillEditionSelect(sel, workKey, blank, preselectBest) {
+async function fillEditionSelect(sel, workKey, blank, preselectBest, currentIsbn) {
   try {
     const list = await olEditions(workKey);
     if (!sel.isConnected) return list;
     sel.innerHTML = `<option value="">${esc(blank)}</option>` + list.slice(0, 60).map((e, i) =>
-      `<option value="${i}" ${preselectBest && i === 0 ? 'selected' : ''}>${esc(editionLabel(e))}</option>`).join('');
+      `<option value="${i}" ${preselectBest && i === 0 ? 'selected' : ''}>${esc(editionLabel(e))}${e.isbn === currentIsbn ? ' (current)' : ''}</option>`).join('');
     if (!list.length) sel.innerHTML = '<option value="">Open Library lists no English or French edition with an ISBN</option>';
     sel.disabled = !list.length;
     return list;
@@ -711,7 +712,7 @@ function viewBook(id) {
         <h2>${esc(b.title)}</h2>
         ${b.subtitle ? `<p class="sub">${esc(b.subtitle)}</p>` : ''}
         <div class="authors">${authors || '<span class="muted">Author unknown</span>'}</div>
-        <div class="facts">${[b.year, b.pages && b.pages + ' pages', b.publisher, b.isbn && 'ISBN ' + b.isbn].filter(Boolean).map(esc).join(' · ')}</div>
+        <div class="facts" id="facts">${[b.year, b.pages && b.pages + ' pages', b.publisher, b.isbn && 'ISBN ' + b.isbn].filter(Boolean).map(esc).join(' · ')}</div>
         <div class="row">
           <label class="field">Status<select id="status">${STATUSES.map(([v, l]) => `<option value="${v}" ${b.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
           <label class="field">How I have it<select id="source">${sourceOpts(b.source, b.status === 'wishlist' ? 'Not yet' : 'Not set')}</select></label>
@@ -806,11 +807,28 @@ function viewBook(id) {
   $('#review').oninput = e => { b.review = e.target.value; saveSoon(); };
   $('#review').onblur = () => saveSoon.flush();
 
+  // Books scanned before 29 Oct 2026 got an ISBN but no publisher: fill it in from that exact
+  // edition, once per session, without redrawing the page (a review may be mid-typing).
+  if (b.isbn && !b.publisher && !editionLooked.has(b.id)) {
+    editionLooked.add(b.id);
+    olEditionByIsbn(b.isbn).then(e => {
+      if (!e?.publisher || b.publisher) return;
+      b.publisher = e.publisher;
+      if (e.pages) b.pages = e.pages;
+      if (!b.coverUrl && e.coverUrl) b.coverUrl = e.coverUrl;
+      save();
+      if (!$('#facts') || location.hash !== '#/book/' + b.id) return;
+      $('#facts').textContent = [b.year, b.pages && b.pages + ' pages', b.publisher, 'ISBN ' + b.isbn].filter(Boolean).join(' · ');
+      $('#d-publisher').value = b.publisher;
+      $('#d-pages').value = b.pages;
+    }).catch(() => {});
+  }
+
   const pick = $('#pickEdition');
   if (pick) pick.onclick = async () => {
     $('#editionRow').innerHTML = `<label class="field edition-field">Edition<select id="d-edition" disabled><option value="">Finding editions…</option></select></label>`;
     const sel = $('#d-edition');
-    const list = await fillEditionSelect(sel, b.workKey, b.isbn ? 'Keep the current edition' : 'Choose one…');
+    const list = await fillEditionSelect(sel, b.workKey, b.isbn ? 'Keep the current edition' : 'Choose one…', false, b.isbn);
     sel.onchange = () => {
       const e = list[sel.value];
       if (!e) return;
