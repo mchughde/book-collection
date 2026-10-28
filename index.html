@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Book Collection</title>
+  <meta name="description" content="My books: library, reading, wishlist, notes and quotes.">
+  <meta name="theme-color" content="#f6f1e7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1c1a17" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Books">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar" aria-label="Sections">
+      <div class="brand">
+        <img src="icon-192.png" alt="" width="28" height="28">
+        <span>Book Collection</span>
+      </div>
+      <nav id="nav"></nav>
+      <div class="sync-status" id="syncStatus"></div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menuBtn" aria-label="Show sections">
+          <svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <h1 id="pageTitle">Book Collection</h1>
+        <a class="btn primary add-btn" id="addBtn" href="#/add">+ Add book</a>
+      </header>
+      <div id="view" class="view"></div>
+    </main>
+  </div>
+
+  <div class="scanner" id="scanner" hidden>
+    <video id="scanVideo" playsinline muted autoplay></video>
+    <div class="scan-frame"></div>
+    <p class="scan-hint" id="scanHint">Point the camera at the barcode on the back of the book</p>
+    <button class="btn scan-close" id="scanClose">Cancel</button>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js?v=1"></script>
+</body>
+</html>
