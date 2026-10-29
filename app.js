@@ -1358,6 +1358,10 @@ function viewAdd(params) {
     wishlist: { status: 'wishlist', source: '' },
     library: { status: 'to-read', source: 'own-physical' },
   }[to] || { status: 'to-read', source: 'own-physical' };
+  // Where it is starts at the last place used for that kind of owned copy (on this device),
+  // so a run of Kindle ebooks or one shelf of print books needs picking only once.
+  const placeKind = s => /^own-(ebook|audio)/.test(s) ? 'digital' : s === 'own-physical' ? 'print' : '';
+  const lastPlace = s => (recall('addPlace') || {})[placeKind(s)] || '';
 
   const resultsHtml = () => {
     if (addState.error) return `<p class="muted">${esc(addState.error)}</p>`;
@@ -1393,6 +1397,8 @@ function viewAdd(params) {
         <label class="field">Status<select id="a-status">${STATUSES.map(([v, l]) => `<option value="${v}" ${defaults.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <label class="field" id="a-yearField" ${defaults.status === 'read' ? '' : 'hidden'}>Year read<input type="text" id="a-year" inputmode="numeric" maxlength="4" placeholder="Unknown" style="width:6em"></label>
         <label class="field">How I have it<select id="a-source"><option value="">Not yet / not set</option>${SOURCES.map(([v, l]) => `<option value="${v}" ${defaults.source === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="field" id="a-locField" ${defaults.status === 'wishlist' ? 'hidden' : ''}>Where it is<select id="a-location">${locationOptions(lastPlace(defaults.source), 'Not set yet')}</select></label>
+        <label class="field" id="a-otherField" hidden>Where?<input type="text" id="a-locationOther" placeholder="In a box in the garage" style="width:12em"></label>
         ${shelves().length ? `<label class="field">Shelf<select id="a-shelf"><option value="">None</option>${shelves().map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label>` : ''}
         <button class="btn primary" id="a-save">Add book</button>
         <button class="btn" id="a-cancel">Cancel</button>
@@ -1447,7 +1453,18 @@ function viewAdd(params) {
         gBox.value = g.join(', ');
         gBox.placeholder = g.length ? '' : 'None found. Type some, or leave blank';
       }).catch(() => { gBox.placeholder = ''; });
-      $('#a-status').onchange = e => { $('#a-yearField').hidden = e.target.value !== 'read'; };
+      $('#a-status').onchange = e => {
+        $('#a-yearField').hidden = e.target.value !== 'read';
+        $('#a-locField').hidden = e.target.value === 'wishlist';
+        $('#a-otherField').hidden = $('#a-locField').hidden || $('#a-location').value !== 'other';
+      };
+      let placePicked = false;
+      $('#a-source').onchange = e => { if (!placePicked) $('#a-location').value = lastPlace(e.target.value); };
+      $('#a-location').onchange = e => {
+        placePicked = true;
+        $('#a-otherField').hidden = e.target.value !== 'other';
+        if (e.target.value === 'other') $('#a-locationOther').focus();
+      };
       $('#a-save').onclick = () => {
         let c = addState.chosen;
         const edition = edSel && edSel.value !== '' ? editions[edSel.value] : exact;
@@ -1466,7 +1483,10 @@ function viewAdd(params) {
         const { manual, fromApple, appleCover, ebookIsbn, audioIsbn, appleGenres, ...fields } = c;
         const typedGenres = ($('#a-genres')?.value || '').split(',').map(g => g.trim()).filter(Boolean);
         const source = $('#a-source').value;
-        const b = newBook({ ...fields, source, genres: [...new Set(typedGenres)], shelves: $('#a-shelf')?.value ? [$('#a-shelf').value] : [] });
+        const location = $('#a-locField').hidden ? '' : $('#a-location').value;
+        const locationOther = location === 'other' ? $('#a-locationOther').value.trim() : '';
+        if (location && location !== 'other' && placeKind(source)) store('addPlace', { ...recall('addPlace'), [placeKind(source)]: location });
+        const b = newBook({ ...fields, source, location, locationOther, genres: [...new Set(typedGenres)], shelves: $('#a-shelf')?.value ? [$('#a-shelf').value] : [] });
         if (edition) applyEdition(b, edition);
         if (appleCover) b.coverUrl = appleCover;
         // An ebook or audiobook has its own ISBN, which Apple's listing gives and editions don't.
