@@ -1620,9 +1620,13 @@ function viewStats() {
   const order = k => k === 'No date' ? -2 : k === 'Before 1900' ? -1 : Number(k.slice(0, 4));
   const decadeRows = Object.entries(decades).sort((a, b) => order(b[0]) - order(a[0]));
 
-  // Ratings in half stars, every step shown so gaps are visible.
+  // Ratings in half stars, from the highest used to the lowest used: steps outside that range
+  // are left off, but a gap inside it stays visible as an empty row.
   const ratings = count(scope.filter(b => b.rating), b => b.rating);
-  const ratingRows = [5, 4.5, 4, 3.5, 3, 2.5, 2, 1.5, 1, 0.5].map(n => [ratingText(n) + (n <= 1 ? ' star' : ' stars'), ratings[n] || 0]);
+  const used = Object.keys(ratings).map(Number);
+  const ratingRows = [5, 4.5, 4, 3.5, 3, 2.5, 2, 1.5, 1, 0.5]
+    .filter(n => n <= Math.max(...used) && n >= Math.min(...used))
+    .map(n => [ratingText(n) + (n <= 1 ? ' star' : ' stars'), ratings[n] || 0]);
   const unrated = scope.filter(b => !b.rating).length;
 
   const perYear = count(reads, x => readYear(x.r) || null);
