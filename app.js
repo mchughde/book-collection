@@ -1011,6 +1011,14 @@ function viewRead() {
 
 /* ---------- book page ---------- */
 
+// A search, not a product page: many ISBNs here are UK/US editions the Australian store
+// doesn't sell, and /dp/<isbn> then lands on "page not found". Title + first author finds
+// whatever editions it has, print and Kindle side by side.
+function amazonUrl(b) {
+  const q = [b.title, (b.authors || [])[0]].filter(Boolean).join(' ');
+  return `https://www.amazon.com.au/s?k=${encodeURIComponent(q)}&i=stripbooks`;
+}
+
 function viewBook(id) {
   const b = db.books[id];
   if (!b || b.deleted) { $('#view').innerHTML = `<div class="empty"><p>That book isn’t in your collection.</p><a href="#/library">Back to library</a></div>`; setTitle('Book'); return; }
@@ -1021,6 +1029,7 @@ function viewBook(id) {
   if (b.status !== 'reading') actions.push(`<button class="btn primary" data-act="start">${hasRead(b) ? 'Read again' : 'Start reading'}</button>`);
   if (b.status === 'reading') actions.push(`<button class="btn primary" data-act="finish">Finished</button>`, `<button class="btn" data-act="dnf">Stopped reading</button>`);
   if (b.status === 'wishlist') actions.push(`<button class="btn" data-act="got">I’ve got it</button>`);
+  actions.push(`<a class="btn" href="${esc(amazonUrl(b))}" target="_blank" rel="noopener noreferrer">Find on Amazon</a>`);
 
   const authors = (b.authors || []).map((name, i) => {
     const key = (b.authorKeys || [])[i];
