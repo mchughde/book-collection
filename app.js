@@ -621,7 +621,7 @@ function renderList(cfg) {
   const draw = () => {
     let list = books().filter(cfg.filter);
     const total = list.length;
-    if (cfg.readChips && st.read !== 'all') list = list.filter(b => st.read === 'read' ? hasRead(b) : !hasRead(b));
+    if (cfg.statusChips && st.read !== 'all') list = list.filter(b => b.status === st.read);
     if (st.status) list = list.filter(b => b.status === st.status);
     if (st.source) list = list.filter(b => b.source === st.source || (b.reads || []).some(r => r.source === st.source));
     if (st.tag) list = list.filter(b => (b.tags || []).includes(st.tag));
@@ -639,8 +639,8 @@ function renderList(cfg) {
     ${cfg.intro || ''}
     <div class="toolbar">
       <input class="search" type="search" id="q" placeholder="Search title, author, notes…" value="${esc(st.q)}">
-      ${cfg.readChips ? `<div class="chips" role="group" aria-label="Read or not">
-        ${[['all', 'All'], ['read', 'Read'], ['unread', 'Not read']].map(([v, l]) => `<button class="chip ${st.read === v ? 'on' : ''}" data-read="${v}">${l}</button>`).join('')}
+      ${cfg.statusChips ? `<div class="chips" role="group" aria-label="Status">
+        ${[['all', 'All'], ...STATUSES.filter(([v]) => v !== 'wishlist')].map(([v, l]) => `<button class="chip ${st.read === v ? 'on' : ''}" data-read="${v}">${l}</button>`).join('')}
       </div>` : ''}
       ${cfg.statusFilter ? `<select id="status" aria-label="Status"><option value="">Any status</option>${STATUSES.map(([v, l]) => `<option value="${v}" ${st.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select>` : ''}
       ${cfg.noSource ? '' : `<select id="source" aria-label="Source"><option value="">Any source</option>${SOURCES.filter(([v]) => !cfg.ownedOnly || v.startsWith('own-')).map(([v, l]) => `<option value="${v}" ${st.source === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`}
@@ -668,8 +668,8 @@ const emptyState = (title, text, addTo) => `<div class="empty"><h2>${title}</h2>
 function viewLibrary() {
   setTitle('My library');
   renderList({
-    key: 'library', filter: isOwned, readChips: true, ownedOnly: true,
-    card: b => ({ meta: hasRead(b) ? 'Read' : b.status === 'reading' ? 'Reading' : 'Not read yet' }),
+    key: 'library', filter: isOwned, statusChips: true, ownedOnly: true,
+    card: b => ({ meta: STATUS_LABEL[b.status] }),
     empty: emptyState('Your library is empty', 'Books you own, in print, ebook or audio, live here. You can see at a glance which ones you’ve read.', 'library'),
   });
 }

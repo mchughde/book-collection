@@ -144,8 +144,10 @@ label.field { display: flex; flex-direction: column; gap: 4px; font-size: .85rem
 
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
 .toolbar .search { flex: 1 1 220px; }
-.chips { display: inline-flex; background: var(--surface-2); border-radius: 9px; padding: 3px; gap: 2px; }
-.chip { border: 0; background: none; padding: 5px 12px; border-radius: 7px; cursor: pointer; font-size: .88rem; color: var(--ink-2); }
+.chips { display: inline-flex; background: var(--surface-2); border-radius: 9px; padding: 3px; gap: 2px; max-width: 100%; overflow-x: auto; }
+.chip { white-space: nowrap; flex: none; border: 0; background: none; padding: 5px 12px; border-radius: 7px; cursor: pointer; font-size: .88rem; color: var(--ink-2); }
+@media (max-width: 420px) { .chip { padding: 5px 8px; } }
+.chips { scrollbar-width: none; }
 .chip.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); font-weight: 600; }
 
 /* ---------- book grid ---------- */
