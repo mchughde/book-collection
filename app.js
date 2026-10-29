@@ -1639,7 +1639,18 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 window.addEventListener('online', () => Sync.run());
 setInterval(() => { if (document.visibilityState === 'visible') Sync.run(); }, 5 * 60e3);
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+  // When an update takes over, reload once so it shows now rather than on the next open.
+  // Not mid-typing, and not on the very first visit (nothing older to replace).
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading || document.activeElement?.matches('input, textarea')) return;
+    reloading = true;
+    location.reload();
+  });
+}
 
 lastPath = location.hash.split('?')[0];
 render();
