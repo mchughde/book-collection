@@ -162,6 +162,7 @@ function newBook(fields) {
     coverUrl: '', year: '', pages: '', publisher: '',
     status: 'to-read', source: '', reads: [], progress: '', rating: 0,
     review: '', notes: [], quotes: [], shelves: [], tags: [],
+    series: '', seriesNo: '', genres: [],
     added: now(), updatedAt: now(), ...fields,
   };
 }
@@ -183,6 +184,8 @@ const hasRead = b => b.status === 'read' || finishedReads(b).length > 0;
 const validYear = y => /^\d{4}$/.test(y) && y >= '1900' && y <= String(new Date().getFullYear());
 const authorLine = b => (b.authors || []).join(', ');
 const allTags = () => [...new Set(books().flatMap(b => b.tags || []))].sort((a, b) => a.localeCompare(b));
+const allGenres = () => [...new Set(books().flatMap(b => b.genres || []))].sort((a, b) => a.localeCompare(b));
+const allSeries = () => [...new Set(books().map(b => b.series).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
 function findDuplicate(c) {
   const t = norm(c.title), a = norm((c.authors || [])[0]);
@@ -620,6 +623,7 @@ const ICONS = {
   discover: '<circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M15.5 8.5l-2 5-5 2 2-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
   stats: '<path d="M5 20V11M12 20V5M19 20v-6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
   settings: '<circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  series: '<path d="M6 4h9v14H6zM9 7h9v14H9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
   shelf: '<path d="M4 18h16M6 18V7h3v11M10 18V5h3v13M14.5 18l1.5-10 3 .5-1.5 9.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>',
 };
 const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -635,6 +639,7 @@ function renderNav(route) {
   html += item('read', 'read', 'Read', count(hasRead));
   html += item('wishlist', 'wishlist', 'Wishlist', count(b => b.status === 'wishlist'));
   html += item('all', 'all', 'All books', all.length);
+  if (allSeries().length) html += item('series', 'series', 'Series', allSeries().length);
   html += item('discover', 'discover', 'New books');
   html += `<div class="nav-heading"><span>Shelves</span><button id="newShelf">+ New</button></div>`;
   for (const s of shelves()) html += item('shelf/' + s.id, 'shelf', s.name, count(b => (b.shelves || []).includes(s.id)));
@@ -674,13 +679,13 @@ function lastName(b) { const a = (b.authors || [])[0] || ''; return a.split(' ')
 
 function matches(b, q) {
   if (!q) return true;
-  const hay = norm([b.title, b.subtitle, authorLine(b), b.isbn, (b.tags || []).join(' '), b.review,
+  const hay = norm([b.title, b.subtitle, authorLine(b), b.isbn, (b.tags || []).join(' '), b.series, (b.genres || []).join(' '), b.review,
     ...(b.notes || []).map(n => n.text), ...(b.quotes || []).map(n => n.text)].join(' '));
   return norm(q).split(' ').every(w => hay.includes(w));
 }
 
 function renderList(cfg) {
-  const st = viewState[cfg.key] ||= { q: '', read: 'all', source: '', tag: '', status: '', sort: cfg.sort || 'added' };
+  const st = viewState[cfg.key] ||= { q: '', read: 'all', source: '', tag: '', genre: '', status: '', sort: cfg.sort || 'added' };
   const draw = () => {
     let list = books().filter(cfg.filter);
     const total = list.length;
@@ -688,6 +693,7 @@ function renderList(cfg) {
     if (st.status) list = list.filter(b => b.status === st.status);
     if (st.source) list = list.filter(b => b.source === st.source || (b.reads || []).some(r => r.source === st.source));
     if (st.tag) list = list.filter(b => (b.tags || []).includes(st.tag));
+    if (st.genre) list = list.filter(b => (b.genres || []).includes(st.genre));
     list = sortBooks(list.filter(b => matches(b, st.q)), st.sort);
     const grid = $('#grid');
     if (!total) { grid.outerHTML = `<div id="grid">${cfg.empty}</div>`; return; }
@@ -697,7 +703,7 @@ function renderList(cfg) {
     $('#shown').textContent = list.length === total ? `${total} book${total === 1 ? '' : 's'}` : `${list.length} of ${total}`;
   };
 
-  const tags = allTags();
+  const tags = allTags(), genres = allGenres();
   $('#view').innerHTML = `
     ${cfg.intro || ''}
     <div class="toolbar">
@@ -707,6 +713,7 @@ function renderList(cfg) {
       </div>` : ''}
       ${cfg.statusFilter ? `<select id="status" aria-label="Status"><option value="">Any status</option>${STATUSES.map(([v, l]) => `<option value="${v}" ${st.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select>` : ''}
       ${cfg.noSource ? '' : `<select id="source" aria-label="Source"><option value="">Any source</option>${SOURCES.filter(([v]) => !cfg.ownedOnly || v.startsWith('own-')).map(([v, l]) => `<option value="${v}" ${st.source === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`}
+      ${genres.length ? `<select id="genre" aria-label="Genre"><option value="">Any genre</option>${genres.map(g => `<option ${st.genre === g ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select>` : ''}
       ${tags.length ? `<select id="tag" aria-label="Tag"><option value="">Any tag</option>${tags.map(t => `<option ${st.tag === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>` : ''}
       <select id="sort" aria-label="Sort">${SORTS.map(([v, l]) => `<option value="${v}" ${st.sort === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <span class="muted small" id="shown"></span>
@@ -718,7 +725,7 @@ function renderList(cfg) {
     document.querySelectorAll('[data-read]').forEach(b => b.classList.toggle('on', b === btn));
     draw();
   });
-  for (const id of ['status', 'source', 'tag', 'sort']) {
+  for (const id of ['status', 'source', 'genre', 'tag', 'sort']) {
     const el = $('#' + id);
     if (el) el.onchange = () => { st[id] = el.value; draw(); };
   }
@@ -753,6 +760,28 @@ function viewWishlist() {
     intro: `<p class="muted small" style="margin-top:0">Books you’d like to read or buy. To see new books by authors you follow, open <a href="#/discover">New books</a>.</p>`,
     empty: emptyState('Nothing on your wishlist', 'Add books you’d like to read or buy. Open one and change its status when you get it.', 'wishlist'),
   });
+}
+
+// Every series, or one series in order once its numbers are set (Number in series, in Details).
+function viewSeries(arg) {
+  const name = arg ? decodeURIComponent(arg) : '';
+  if (!name) {
+    setTitle('Series');
+    const names = allSeries();
+    $('#view').innerHTML = names.length ? `<div class="series-list">${names.map(n => {
+      const n2 = books().filter(b => b.series === n).length;
+      return `<a class="series-row" href="#/series/${encodeURIComponent(n)}"><span>${esc(n)}</span><span class="muted small">${n2} book${n2 === 1 ? '' : 's'}</span></a>`;
+    }).join('')}</div>` : `<div class="empty"><p>No series yet. Set a book’s series in its Details.</p></div>`;
+    return;
+  }
+  setTitle(name);
+  const num = b => parseFloat(b.seriesNo) || Infinity;
+  const list = books().filter(b => b.series === name)
+    .sort((a, b) => num(a) - num(b) || String(a.year).localeCompare(String(b.year)) || a.title.localeCompare(b.title));
+  $('#view').innerHTML = `<a class="back" href="#/series" id="back">‹ All series</a>
+    <p class="muted small">${list.length} book${list.length === 1 ? '' : 's'} in your collection${list.some(b => !b.seriesNo) ? '. Set each book’s number in series, in its Details, to put them in order' : ', in order'}.</p>
+    <div class="grid">${list.map(b => cardHtml(b, { meta: [b.seriesNo && 'Book ' + b.seriesNo, STATUS_LABEL[b.status]].filter(Boolean).join(' · ') })).join('')}</div>`;
+  $('#back').onclick = e => { if (inAppSteps > 0) { e.preventDefault(); history.back(); } };
 }
 
 function viewShelf(id) {
@@ -881,6 +910,9 @@ function viewBook(id) {
         <h2>${esc(b.title)}</h2>
         ${b.subtitle ? `<p class="sub">${esc(b.subtitle)}</p>` : ''}
         <div class="authors">${authors || '<span class="muted">Author unknown</span>'}</div>
+        ${b.series || (b.genres || []).length ? `<div class="facts">${[
+          b.series && `Series: <a href="#/series/${encodeURIComponent(b.series)}">${esc(b.series)}</a>${b.seriesNo ? ', book ' + esc(b.seriesNo) : ''}`,
+          esc((b.genres || []).join(', '))].filter(Boolean).join(' · ')}</div>` : ''}
         <div class="facts" id="facts">${[b.year, b.pages && b.pages + ' pages', b.publisher, b.isbn && 'ISBN ' + b.isbn].filter(Boolean).map(esc).join(' · ')}</div>
         <div class="row">
           <label class="field">Status<select id="status">${STATUSES.map(([v, l]) => `<option value="${v}" ${b.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -946,6 +978,8 @@ function viewBook(id) {
             <label class="field">Authors (comma between)<input type="text" id="d-authors" value="${esc(authorLine(b))}"></label>
             ${detailField('year', 'Year')}${detailField('pages', 'Pages', 'numeric')}${detailField('isbn', 'ISBN', 'numeric')}
             ${detailField('publisher', 'Publisher')}${detailField('coverUrl', 'Cover image web address')}
+            ${detailField('series', 'Series')}${detailField('seriesNo', 'Number in series', 'decimal')}
+            <label class="field">Genres (comma between)<input type="text" id="d-genres" value="${esc((b.genres || []).join(', '))}"></label>
           </div>
           ${b.workKey ? `<div class="row" style="margin:12px 0 0" id="editionRow">
             <button class="btn small" id="pickEdition">${b.isbn ? 'Change edition' : 'Choose edition'}</button>
@@ -1073,16 +1107,20 @@ function viewBook(id) {
   tagInput.onchange = addTag;
   view.querySelectorAll('[data-untag]').forEach(x => x.onclick = () => { b.tags = b.tags.filter(t => t !== x.dataset.untag); save(); render(); });
 
-  for (const f of ['title', 'subtitle', 'year', 'pages', 'isbn', 'publisher', 'coverUrl']) {
+  for (const f of ['title', 'subtitle', 'year', 'pages', 'isbn', 'publisher', 'coverUrl', 'series', 'seriesNo']) {
     $('#d-' + f).onchange = e => {
       let v = e.target.value.trim();
       if (f === 'coverUrl' && v) {
         v = cleanUrl(v);
         if (!v) { toast('That isn’t a web address. Copy the picture’s address, starting https://'); e.target.value = b.coverUrl; return; }
       }
-      b[f] = v; save(); if (f === 'title' || f === 'coverUrl') render();
+      b[f] = v; save(); if (['title', 'coverUrl', 'series', 'seriesNo'].includes(f)) render();
     };
   }
+  $('#d-genres').onchange = e => {
+    b.genres = [...new Set(e.target.value.split(',').map(s => s.trim()).filter(Boolean))];
+    save(); render();
+  };
   $('#d-authors').onchange = e => {
     const names = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
     // Keep each Open Library author link only while the name is unchanged.
@@ -1597,6 +1635,13 @@ function viewSettings() {
       <p class="muted small">Loading a backup merges it with what’s here. Nothing is deleted, and the newer copy of each book wins.</p>
     </section>
     <section>
+      <h2>Import from LibraryThing</h2>
+      <p>Bring in books from LibraryThing’s JSON export. Books already in your collection are skipped, and covers are looked up afterwards.</p>
+      <div class="row"><label class="btn">Choose the export file<input type="file" id="ltFile" accept=".json,application/json" hidden></label></div>
+      <div id="ltPreview"></div>
+      <p class="small" id="coverProgress"></p>
+    </section>
+    <section>
       <h2>On this device</h2>
       <p class="small muted">${books().length} books, ${shelves().length} shelves, ${followed().length} followed authors. Book details and covers come from <a href="https://openlibrary.org" target="_blank" rel="noopener">Open Library</a>.</p>
     </section>
@@ -1639,6 +1684,31 @@ function viewSettings() {
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   };
+  Covers.show();
+  $('#ltFile').onchange = async e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const box = $('#ltPreview');
+    try {
+      const { fresh, skipped } = readLibraryThing(await file.text());
+      const n = (f, one, many) => { const k = fresh.filter(f).length; return k ? `${k} ${k === 1 ? one : many}` : ''; };
+      box.innerHTML = `<div class="panel" style="margin-top:12px">
+        <p style="margin-top:0"><strong>${fresh.length + skipped.length} books in the file.</strong> ${fresh.length} new${skipped.length ? `; ${skipped.length} already in your collection will be skipped (${skipped.slice(0, 3).map(b => '“' + esc(b.title) + '”').join(', ')}${skipped.length > 3 ? '…' : ''})` : ''}.</p>
+        <p class="small">They’ll come in as Read, year unknown, and owned. ${[n(b => b.series, 'has a series', 'have a series'), n(b => b.tags.length, 'has tags', 'have tags'), n(b => b.rating, 'has a rating', 'have a rating'), n(b => b.source === 'own-ebook', 'is an ebook', 'are ebooks')].filter(Boolean).join(', ')}.</p>
+        <div class="row" style="margin-bottom:0">${fresh.length ? `<button class="btn primary" id="ltGo">Import ${fresh.length} book${fresh.length === 1 ? '' : 's'}</button>` : ''}<button class="btn" id="ltCancel">Cancel</button></div>
+      </div>`;
+      $('#ltCancel').onclick = () => { box.innerHTML = ''; };
+      if ($('#ltGo')) $('#ltGo').onclick = () => {
+        for (const b of fresh) db.books[b.id] = b;
+        commit();
+        box.innerHTML = '';
+        toast(`Imported ${fresh.length} books. Finding covers…`, 4000);
+        renderNav('settings');
+        Covers.run();
+      };
+    } catch (err) { box.innerHTML = `<p style="color:var(--err)">${esc(err.message)}</p>`; }
+  };
   $('#import').onchange = async e => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1653,6 +1723,134 @@ function viewSettings() {
     } catch (err) { toast(err.message, 4000); }
   };
 }
+
+/* ---------- LibraryThing import ---------- */
+
+// LibraryThing's JSON export: an object of books keyed by id. Dianne's (29 Oct 2026) has 267 books
+// entered 2012–13, with no read status, dates or reviews, so books come in as Read, year unknown
+// (her choice). The export has no covers; Covers.run() looks them up afterwards.
+const TAG_FIXES = { autobigraphy: ['autobiography'], psycholgy: ['psychology'], 'London. United Kingdom': ['London', 'United Kingdom'] };
+const plainText = s => { const t = document.createElement('textarea'); t.innerHTML = String(s || ''); return t.value.trim(); };
+
+// Series come with their translations ("Ania z Zielonego Wzgórza", "La saga d'Anne", "Anne of
+// Green Gables"). Prefer a name with no accents or foreign words, then the most frequent, then the
+// most English-looking, then the first. "{Schama}" is LibraryThing telling series apart. Tested
+// on Dianne's export (29 Oct 2026): every multi-name series came out in English.
+const FOREIGN_WORDS = new Set('z i e et la le les dai del de der die das und och og el los las il di da du komisario inspektor kolekcja juhtum juhtumid trylogia'.split(' '));
+const ENGLISH_WORDS = new Set('the of and in on to by for with inspector detective mystery mysteries series trilogy guide guides travel novels books chronicles adventures collection complete'.split(' '));
+function pickSeriesName(list) {
+  const names = list.map(n => plainText(n).replace(/\s*\{[^}]*\}\s*$/, '')).filter(Boolean);
+  const freq = new Map();
+  names.forEach(n => freq.set(n, (freq.get(n) || 0) + 1));
+  const words = n => n.toLowerCase().match(/[a-z]+/g) || [];
+  const score = (n, i) => [
+    /[^\x00-\x7f]/.test(n) || words(n).some(w => FOREIGN_WORDS.has(w)) ? 0 : 1,
+    freq.get(n), words(n).filter(w => ENGLISH_WORDS.has(w)).length, -i];
+  const higher = (a, b) => { const k = a.findIndex((v, j) => v !== b[j]); return k >= 0 && a[k] > b[k]; };
+  let best = '', bestScore = null;
+  names.forEach((n, i) => {
+    const sc = score(n, i);
+    if (!bestScore || higher(sc, bestScore)) { best = n; bestScore = sc; }
+  });
+  return best;
+}
+
+function fromLibraryThing(x) {
+  const people = x.authors || [];
+  const authors = people.filter(a => !a.role).map(a => plainText(a.fl)).filter(Boolean);
+  const helpers = people.filter(a => a.role).map(a => `${a.role}: ${plainText(a.fl)}`);
+  const tags = [...new Set((x.tags || []).map(plainText).flatMap(t => TAG_FIXES[t] || [t]))];
+  const ebook = (x.format || []).some(f => /ebook/i.test(f.text)) || tags.some(t => t.toLowerCase() === 'ebook');
+  const series = pickSeriesName(x.series || []);
+  const b = newBook({
+    title: plainText(x.title), authors,
+    isbn: x.isbn?.['2'] || isbn10to13(x.isbn?.['0']) || '',
+    year: (String(x.date || '').match(/\d{4}/) || [''])[0],
+    pages: parseInt(x.pages) || '',
+    publisher: plainText(String(x.publication || '').split(' (')[0]),
+    source: ebook ? 'own-ebook' : 'own-physical',
+    rating: Math.round((Number(x.rating) || 0) * 2) / 2,
+    tags, series, genres: (x.genre || []).filter(g => !/^General /.test(g)),
+    notes: helpers.length ? [{ id: uid(), text: helpers.join('\n'), page: '', date: now() }] : [],
+    added: /^\d{4}-\d\d-\d\d$/.test(x.entrydate || '') ? x.entrydate + 'T12:00:00.000Z' : now(),
+    ltId: String(x.books_id || ''), needsCover: true,
+  });
+  setStatus(b, 'read');
+  return b;
+}
+
+function readLibraryThing(text) {
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error('That file isn’t a LibraryThing JSON export.'); }
+  const list = data && typeof data === 'object' ? Object.values(data) : [];
+  if (!list.length || !list.every(x => x && x.books_id && 'title' in x)) throw new Error('That file isn’t a LibraryThing JSON export.');
+  const fresh = [], skipped = [];
+  for (const x of list) {
+    const b = fromLibraryThing(x);
+    // Each LibraryThing entry is its own copy (two volumes can share a title), so only books
+    // already in the collection are skipped.
+    const here = books().find(o => o.ltId && o.ltId === b.ltId) || findDuplicate(b);
+    (here ? skipped : fresh).push(b);
+  }
+  return { fresh, skipped };
+}
+
+// Covers, and Open Library's work and author links, for imported books: Open Library by ISBN,
+// then by title and author, then Apple Books. Two at a time, saving as it goes; it carries on
+// next time the app opens if it was closed part way. Apple allows about 20 requests a minute.
+const Covers = {
+  running: false, done: 0, total: 0, found: 0, appleNext: 0,
+  async run() {
+    if (this.running) return;
+    const queue = books().filter(b => b.needsCover);
+    if (!queue.length) return;
+    Object.assign(this, { running: true, done: 0, found: 0, total: queue.length });
+    this.show();
+    const worker = async () => {
+      for (let b; (b = queue.shift()); ) {
+        await this.one(b).catch(() => {});
+        this.done++;
+        this.show();
+        if (this.done % 12 === 0 && /^#\/(library|all|read|series)/.test(location.hash)) refreshAfterSync();
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    this.running = false;
+    this.show();
+    if (/^#\/(library|all|read|series)/.test(location.hash)) refreshAfterSync();
+    toast(`Covers found for ${this.found} of ${this.total} imported books`, 4000);
+  },
+  async one(b) {
+    let cover = '', o = null;
+    if (b.isbn) o = (await olSearch(b.isbn).catch(() => []))[0];
+    if (!o && b.authors[0]) o = (await olSearch(`${b.title} ${surname(b.authors[0])}`).catch(() => [])).find(x => sameBook(x, b));
+    if (o?.coverUrl.includes('/b/id/')) cover = o.coverUrl;
+    if (!cover && b.authors[0]) cover = await this.apple(b);
+    const cur = db.books[b.id];
+    if (!cur || cur.deleted) return;
+    if (o) {
+      cur.workKey ||= o.workKey;
+      if (!(cur.authorKeys || []).some(Boolean)) cur.authorKeys = cur.authors.map(a => o.authorKeys[o.authors.findIndex(x => surname(x) === surname(a))] || '');
+    }
+    if (!cur.coverUrl) cur.coverUrl = cover || (cur.isbn ? `https://covers.openlibrary.org/b/isbn/${cur.isbn}-M.jpg?default=false` : '');
+    if (cover) this.found++;
+    delete cur.needsCover;
+    saveBook(cur);
+  },
+  async apple(b) {
+    const wait = this.appleNext - Date.now();
+    this.appleNext = Math.max(Date.now(), this.appleNext) + 3500;
+    if (wait > 0) await sleep(wait);
+    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(b.title + ' ' + b.authors[0])}&media=ebook&country=au&limit=5`).catch(() => null);
+    if (!res?.ok) return '';
+    const hit = ((await res.json()).results || []).map(r => appleToBook(r, 'ebook')).find(x => sameBook(x, b));
+    return hit?.coverUrl || '';
+  },
+  show() {
+    const el = $('#coverProgress');
+    if (el) el.textContent = this.running ? `Finding covers: ${this.done} of ${this.total}…` : this.total ? `Covers found for ${this.found} of ${this.total} imported books.` : '';
+  },
+};
 
 /* ---------- router ---------- */
 
@@ -1673,6 +1871,7 @@ function render() {
     case 'wishlist': viewWishlist(); break;
     case 'all': viewAll(); break;
     case 'shelf': viewShelf(arg); break;
+    case 'series': viewSeries(arg); break;
     case 'book': viewBook(arg); break;
     case 'add': viewAdd(params); break;
     case 'discover': viewDiscover(); break;
@@ -1721,4 +1920,5 @@ loadDb().then(data => {
   loaded = true;
   render();
   Sync.run();
+  Covers.run();
 });

@@ -150,6 +150,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb
 label.field { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; color: var(--ink-2); }
 
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+.toolbar select { max-width: 15em; }
 .toolbar .search { flex: 1 1 220px; }
 .chips { display: inline-flex; background: var(--surface-2); border-radius: 9px; padding: 3px; gap: 2px; max-width: 100%; overflow-x: auto; }
 .chip { white-space: nowrap; flex: none; border: 0; background: none; padding: 5px 12px; border-radius: 7px; cursor: pointer; font-size: .88rem; color: var(--ink-2); }
@@ -276,3 +277,8 @@ label.field { display: flex; flex-direction: column; gap: 4px; font-size: .85rem
 .settings .form-grid { grid-template-columns: 1fr 1fr; }
 @media (max-width: 600px) { .settings .form-grid { grid-template-columns: 1fr; } }
 code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+
+/* ---------- series ---------- */
+.series-list { display: flex; flex-direction: column; max-width: 640px; }
+.series-row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 4px; border-bottom: 1px solid var(--line); color: var(--ink); text-decoration: none; }
+.series-row:hover { background: var(--surface); }
