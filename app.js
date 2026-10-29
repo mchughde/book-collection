@@ -17,6 +17,9 @@ const SOURCES = [
   ['lib-physical', 'Library · physical'],
   ['lib-ebook', 'Library · ebook'],
   ['lib-audio', 'Library · audiobook'],
+  // Read while she subscribes to Prime, and gone if she cancels (or Amazon rotates it out), so
+  // not owned: it stays out of My library. Always in the Kindle app.
+  ['prime-ebook', 'Prime Reading · ebook'],
   ['borrowed', 'Borrowed'],
   ['other', 'Other'],
 ];
@@ -1142,7 +1145,11 @@ function viewBook(id) {
   $('#back').onclick = e => { if (inAppSteps > 0) { e.preventDefault(); history.back(); } };
 
   $('#status').onchange = e => { setStatus(b, e.target.value); save(); render(); };
-  $('#source').onchange = e => { b.source = e.target.value; save(); };
+  $('#source').onchange = e => {
+    b.source = e.target.value;
+    if (b.source === 'prime-ebook' && !b.location) { b.location = 'kindle'; save(); render(); return; }
+    save();
+  };
   if ($('#location')) $('#location').onchange = e => { b.location = e.target.value; if (b.location !== 'other') b.locationOther = ''; save(); render(); };
   if ($('#locationOther')) $('#locationOther').onchange = e => { b.locationOther = e.target.value.trim(); save(); };
   const prog = $('#progress');
@@ -1361,7 +1368,7 @@ function viewAdd(params) {
   // Where it is starts at the last place used for that kind of owned copy (on this device),
   // so a run of Kindle ebooks or one shelf of print books needs picking only once.
   const placeKind = s => /^own-(ebook|audio)/.test(s) ? 'digital' : s === 'own-physical' ? 'print' : '';
-  const lastPlace = s => (recall('addPlace') || {})[placeKind(s)] || '';
+  const lastPlace = s => s === 'prime-ebook' ? 'kindle' : (recall('addPlace') || {})[placeKind(s)] || '';
 
   const resultsHtml = () => {
     if (addState.error) return `<p class="muted">${esc(addState.error)}</p>`;
@@ -1483,10 +1490,11 @@ function viewAdd(params) {
         const { manual, fromApple, appleCover, ebookIsbn, audioIsbn, appleGenres, ...fields } = c;
         const typedGenres = ($('#a-genres')?.value || '').split(',').map(g => g.trim()).filter(Boolean);
         const source = $('#a-source').value;
-        const location = $('#a-locField').hidden ? '' : $('#a-location').value;
-        const locationOther = location === 'other' ? $('#a-locationOther').value.trim() : '';
-        if (location && location !== 'other' && placeKind(source)) store('addPlace', { ...recall('addPlace'), [placeKind(source)]: location });
-        const b = newBook({ ...fields, source, location, locationOther, genres: [...new Set(typedGenres)], shelves: $('#a-shelf')?.value ? [$('#a-shelf').value] : [] });
+        // Not called `location`: that would hide window.location, used below to open the book.
+        const place = $('#a-locField').hidden ? '' : $('#a-location').value;
+        const locationOther = place === 'other' ? $('#a-locationOther').value.trim() : '';
+        if (place && place !== 'other' && placeKind(source)) store('addPlace', { ...recall('addPlace'), [placeKind(source)]: place });
+        const b = newBook({ ...fields, source, location: place, locationOther, genres: [...new Set(typedGenres)], shelves: $('#a-shelf')?.value ? [$('#a-shelf').value] : [] });
         if (edition) applyEdition(b, edition);
         if (appleCover) b.coverUrl = appleCover;
         // An ebook or audiobook has its own ISBN, which Apple's listing gives and editions don't.
