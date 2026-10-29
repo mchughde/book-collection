@@ -461,9 +461,95 @@ function appleToBook(r, kind) {
     coverUrl: art.replace(/\/\d+x\d+bb\./, '/600x600bb.'),
     ebookIsbn: kind === 'ebook' ? (art.match(/\/(97[89]\d{10})\.\w+\//) || [])[1] || '' : '',
     audioIsbn: kind === 'audio' ? (art.match(/\/(97[89]\d{10})\.\w+\//) || [])[1] || '' : '',
+    appleGenres: (r.genres || []).filter(g => g !== 'Books'),
     fromApple: true,
   };
 }
+
+// One book looked up in Apple's store by title and author, for its cover and categories. Apple
+// allows about 20 requests a minute, so lookups made in the background are spaced 3.5 s apart.
+let appleNext = 0;
+async function appleMatch(b) {
+  const wait = appleNext - Date.now();
+  appleNext = Math.max(Date.now(), appleNext) + 3500;
+  if (wait > 0) await sleep(wait);
+  const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(b.title + ' ' + b.authors[0])}&media=ebook&country=au&limit=5`).catch(() => null);
+  if (!res?.ok) return null;
+  return ((await res.json()).results || []).map(r => appleToBook(r, 'ebook')).find(x => sameBook(x, b)) || null;
+}
+
+// Apple's shop categories (or Open Library's subjects) translated into the genre names Dianne's
+// LibraryThing books use, so new books fit the same filters and charts. First match per category;
+// order matters ("Travel Essays & Memoirs" is Travel, "Historical Fiction" isn't History).
+const GENRE_MAP = [
+  [/historical fiction/i, 'Historical Fiction'], [/sci-?fi|science fiction/i, 'Science Fiction'], [/science history/i, 'Science & Nature'],
+  [/political science/i, 'Politics, Government, Law and Public Policy'], [/social science|sociolog/i, 'Sociology'],
+  [/\btravel/i, 'Travel'], [/biograph|memoir/i, 'Biography & Memoir'],
+  [/myster|crime|detective/i, 'Mystery'], [/thriller|suspense/i, 'Suspense & Thriller'],
+  [/\bhistory\b/i, 'History'], [/philosoph/i, 'Philosophy'],
+  [/religio|spiritual|christian|buddh|bible|theolog/i, 'Religion & Spirituality'],
+  [/young adult|\bteen/i, 'Young Adult'], [/\bkids\b|child|juvenile/i, "Children's Books"],
+  [/romance/i, 'Romance'], [/poetry/i, 'Poetry'], [/music/i, 'Music'],
+  [/science|nature|physics|chemistry|biology|ecology/i, 'Science & Nature'],
+  [/health|mind & body|fitness|wellness|diet/i, 'Health & Wellness'], [/cook|food|wine/i, 'Food & Cooking'],
+  [/business|finance|economics|management/i, 'Business'], [/\barts?\b|design|architecture|photograph/i, 'Art & Design'],
+  [/politic|current affairs|\blaw\b|government/i, 'Politics, Government, Law and Public Policy'],
+  [/anthropolog/i, 'Anthropology'],
+  [/gender|sexuality|feminis/i, 'Sexuality and Gender Studies'], [/literary criticism|literature studies/i, 'Literature Studies and Criticism'],
+  [/sport|outdoor|recreation|leisure|walking|hiking/i, 'Sports and Leisure'],
+  [/reference|dictionar|encyclop/i, 'Reference'], [/computer|technology|internet/i, 'Technology'],
+];
+const FICTION_ONLY = ['Mystery', 'Suspense & Thriller', 'Romance', 'Historical Fiction', 'Science Fiction'];
+const NONFICTION_ONLY = ['Literature Studies and Criticism', 'Reference', 'Business', 'Technology', 'Biography & Memoir'];
+function genresFrom(cats, fromApple) {
+  cats = cats.filter(c => c && c !== 'Books');
+  if (!cats.length) return [];
+  const specific = [];
+  for (const cat of cats) {
+    const hit = GENRE_MAP.find(([re]) => re.test(cat));
+    if (hit && !specific.includes(hit[1])) specific.push(hit[1]);
+  }
+  // Apple puts its main category first, which decides Fiction or Nonfiction ("Sophie's World" is
+  // tagged both). Open Library has no main subject, so a "fiction" subject decides it there.
+  const fictiony = c => !/non-?fiction|true crime|criticism|studies/i.test(c) &&
+    /fiction|literature|myster|thriller|crime|romance|fantasy|classic|poetry|drama|short stor|comic/i.test(c);
+  const fiction = fromApple ? fictiony(cats[0]) : cats.some(c => /\bfiction\b/i.test(c) && !/non-?fiction/i.test(c));
+  if (!fromApple && !fiction && !specific.length) return [];
+  // Shop labels can contradict the main category (Apple files Normal People under Literary
+  // Criticism too), so a novel drops study-only genres and nonfiction drops novel-only ones.
+  const wrongSide = fiction ? NONFICTION_ONLY : FICTION_ONLY;
+  return [fiction ? 'Fiction' : 'Nonfiction', ...specific.filter(g => !wrongSide.includes(g)).slice(0, 4)];
+}
+// Genres for a book about to be added: Apple's categories if the search brought them, else an
+// Apple lookup by title and author, else Open Library's subjects for the work.
+async function guessGenres(c) {
+  if (c.appleGenres?.length) return genresFrom(c.appleGenres, true);
+  const a = c.authors?.[0] ? await appleMatch(c) : null;
+  if (a?.appleGenres?.length) return genresFrom(a.appleGenres, true);
+  if (c.workKey) {
+    const w = await fetch(`https://openlibrary.org${c.workKey}.json`).then(r => r.ok ? r.json() : null).catch(() => null);
+    if (w?.subjects?.length) return genresFrom(w.subjects, false);
+  }
+  return [];
+}
+// Books with no genre (added by hand, or saved before a lookup finished) get one in the
+// background, once each: about 20 books took ~70 s on 29 Oct 2026, held back by Apple's limit.
+const GenreFill = {
+  running: false,
+  async run() {
+    if (this.running) return;
+    this.running = true;
+    for (let b; (b = books().find(x => !(x.genres || []).length && !x.genreChecked && x.authors?.[0])); ) {
+      const genres = await guessGenres(b).catch(() => []);
+      const cur = db.books[b.id];
+      if (!cur || cur.deleted) continue;
+      if (!(cur.genres || []).length) cur.genres = genres;
+      cur.genreChecked = true;
+      saveBook(cur);
+    }
+    this.running = false;
+  },
+};
 
 // Searches both at once (an ISBN goes to Open Library only). Apple's order leads, since it ranks
 // well; a book both know keeps Open Library's details, for its editions and author links, with
@@ -477,7 +563,7 @@ async function findBooks(query) {
     const i = olList.findIndex(o => sameBook(o, a));
     if (i < 0) { out.push(a); continue; }
     const o = olList.splice(i, 1)[0];
-    out.push({ ...o, subtitle: o.subtitle || a.subtitle, coverUrl: a.coverUrl || o.coverUrl, appleCover: a.coverUrl, ebookIsbn: a.ebookIsbn, audioIsbn: a.audioIsbn });
+    out.push({ ...o, subtitle: o.subtitle || a.subtitle, coverUrl: a.coverUrl || o.coverUrl, appleCover: a.coverUrl, ebookIsbn: a.ebookIsbn, audioIsbn: a.audioIsbn, appleGenres: a.appleGenres });
   }
   // Drop Apple-only listings whose title a higher-ranked result already has: cheap summaries
   // and knock-offs of popular books ("Normal People" by DailysBooks), which rank below the real one.
@@ -1282,6 +1368,8 @@ function viewAdd(params) {
       ${c.workKey && !c.isbn ? `<div class="row" style="margin-bottom:4px"><label class="field edition-field">Edition
           <select id="a-edition" disabled><option value="">Finding editions…</option></select></label></div>
         <p class="muted small" style="margin:0 0 12px">A best guess. Pick yours if it’s listed, or scan the barcode to get the exact one.</p>` : ''}
+      ${c.manual ? '' : `<div class="row" style="margin-bottom:4px"><label class="field edition-field">Genres (comma between)
+          <input type="text" id="a-genres" placeholder="Finding genres…"></label></div>`}
       ${c.fromApple && !c.workKey ? `<p class="muted small" style="margin:0 0 12px">Found only in Apple Books, so there’s no publisher or page count. If you have the printed book, scanning its barcode adds its ISBN.</p>` : ''}
       <div class="row">
         <label class="field">Status<select id="a-status">${STATUSES.map(([v, l]) => `<option value="${v}" ${defaults.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -1334,6 +1422,13 @@ function viewAdd(params) {
         fillEditionSelect(edSel, c.workKey, 'No particular edition', true).then(list => { editions = list; if (edSel.isConnected) showCover(); });
       }
       if (c.isbn) olEditionByIsbn(c.isbn).then(e => { exact = e; }).catch(() => {});
+      // Genres arrive a moment later; a box already typed in is left alone.
+      const gBox = $('#a-genres');
+      if (gBox) guessGenres(c).then(g => {
+        if (!gBox.isConnected || gBox.value) return;
+        gBox.value = g.join(', ');
+        gBox.placeholder = g.length ? '' : 'None found. Type some, or leave blank';
+      }).catch(() => { gBox.placeholder = ''; });
       $('#a-status').onchange = e => { $('#a-yearField').hidden = e.target.value !== 'read'; };
       $('#a-save').onclick = () => {
         let c = addState.chosen;
@@ -1350,9 +1445,10 @@ function viewAdd(params) {
           const dup = findDuplicate(c);
           if (dup && !confirm(`“${dup.title}” is already in your collection. Add it again anyway?`)) return;
         }
-        const { manual, fromApple, appleCover, ebookIsbn, audioIsbn, ...fields } = c;
+        const { manual, fromApple, appleCover, ebookIsbn, audioIsbn, appleGenres, ...fields } = c;
+        const typedGenres = ($('#a-genres')?.value || '').split(',').map(g => g.trim()).filter(Boolean);
         const source = $('#a-source').value;
-        const b = newBook({ ...fields, source, shelves: $('#a-shelf')?.value ? [$('#a-shelf').value] : [] });
+        const b = newBook({ ...fields, source, genres: [...new Set(typedGenres)], shelves: $('#a-shelf')?.value ? [$('#a-shelf').value] : [] });
         if (edition) applyEdition(b, edition);
         if (appleCover) b.coverUrl = appleCover;
         // An ebook or audiobook has its own ISBN, which Apple's listing gives and editions don't.
@@ -1361,6 +1457,7 @@ function viewAdd(params) {
         setStatus(b, $('#a-status').value);
         if (yearRead) b.reads[0].year = yearRead;
         saveBook(b);
+        GenreFill.run(); // if the genres hadn't arrived yet
         addState = { q: '', results: null, chosen: null, error: '' };
         toast(`Added “${b.title}”`);
         location.hash = '#/book/' + b.id;
@@ -1890,7 +1987,7 @@ const Stock = {
       f.title = title.trim();
       f.authors = (prompt('And the author? (leave blank if unsure)') || '').split(',').map(a => a.trim()).filter(Boolean);
     }
-    const b = newBook({ ...f, source: 'own-physical', checkedAt: now() });
+    const b = newBook({ ...f, source: 'own-physical', checkedAt: now(), genres: await guessGenres(f).catch(() => []), genreChecked: true });
     setStatus(b, 'to-read');
     const e = await olEditionByIsbn(f.isbn).catch(() => null);
     if (e) { applyEdition(b, e); if (f.coverUrl.includes('/b/id/')) b.coverUrl = f.coverUrl; }
@@ -2097,7 +2194,7 @@ function readLibraryThing(text) {
 // then by title and author, then Apple Books. Two at a time, saving as it goes; it carries on
 // next time the app opens if it was closed part way. Apple allows about 20 requests a minute.
 const Covers = {
-  running: false, done: 0, total: 0, found: 0, appleNext: 0,
+  running: false, done: 0, total: 0, found: 0,
   async run() {
     if (this.running) return;
     const queue = books().filter(b => b.needsCover);
@@ -2136,15 +2233,7 @@ const Covers = {
     delete cur.needsCover;
     saveBook(cur);
   },
-  async apple(b) {
-    const wait = this.appleNext - Date.now();
-    this.appleNext = Math.max(Date.now(), this.appleNext) + 3500;
-    if (wait > 0) await sleep(wait);
-    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(b.title + ' ' + b.authors[0])}&media=ebook&country=au&limit=5`).catch(() => null);
-    if (!res?.ok) return '';
-    const hit = ((await res.json()).results || []).map(r => appleToBook(r, 'ebook')).find(x => sameBook(x, b));
-    return hit?.coverUrl || '';
-  },
+  async apple(b) { return (await appleMatch(b))?.coverUrl || ''; },
   show() {
     const el = $('#coverProgress');
     if (el) el.textContent = this.running ? `Finding covers: ${this.done} of ${this.total}…` : this.total ? `Covers found for ${this.found} of ${this.total} imported books.` : '';
@@ -2252,4 +2341,5 @@ loadDb().then(data => {
   Sync.run();
   Covers.run();
   FirstYears.run();
+  GenreFill.run();
 });
