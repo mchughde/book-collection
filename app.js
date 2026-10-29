@@ -335,6 +335,85 @@ function docToBook(d, isbn = '') {
   };
 }
 
+/* ---------- Apple Books ---------- */
+
+// Apple's public store search, Australian store (Dianne's choice, 29 Oct 2026): no key, open to
+// web pages, and far better than Open Library at new books and at ranking a bare title. It lists
+// ebooks and audiobooks, so no publisher, pages or print ISBN; but the cover's file name is
+// usually that ebook's or audiobook's own ISBN, which is kept for books she has in that form.
+const APPLE_JUNK = /^(analysis|untitled)\b|\b(summary|study guide|a guide to|reflection on|book analysis|workbook|sparknotes|cliffsnotes)\b/i;
+const surname = s => norm(s).split(' ').pop();
+const sameBook = (a, b) => norm(a.title) === norm(b.title) &&
+  (a.authors || []).some(x => (b.authors || []).some(y => surname(x) === surname(y)));
+
+async function appleSearch(query) {
+  const ask = async media => {
+    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=${media}&country=au&limit=15`);
+    if (!res.ok) throw new Error('Apple Books didn’t answer (' + res.status + ')');
+    return (await res.json()).results || [];
+  };
+  const [ebooks, audio] = await Promise.allSettled([ask('ebook'), ask('audiobook')]);
+  if (ebooks.status === 'rejected' && audio.status === 'rejected') throw ebooks.reason;
+  const out = [];
+  const all = [...(ebooks.value || []).map(r => appleToBook(r, 'ebook')), ...(audio.value || []).map(r => appleToBook(r, 'audio'))];
+  for (const c of all) {
+    if (!c.title || !c.authors.length || APPLE_JUNK.test(c.title)) continue;
+    const same = out.find(o => sameBook(o, c));
+    if (!same) { out.push(c); continue; }
+    same.ebookIsbn ||= c.ebookIsbn;
+    same.audioIsbn ||= c.audioIsbn;
+  }
+  return out;
+}
+
+function appleToBook(r, kind) {
+  const full = String(r.trackName || r.collectionName || '').replace(/\s*\((un)?abridged\)\s*$/i, '').trim();
+  const [title, ...rest] = full.split(': ');
+  const art = r.artworkUrl100 || '';
+  return {
+    title, subtitle: rest.join(': '),
+    authors: String(r.artistName || '').split(/\s*[&,]\s*/).filter(Boolean),
+    authorKeys: [], workKey: '', isbn: '',
+    year: (r.releaseDate || '').slice(0, 4), pages: '',
+    coverUrl: art.replace(/\/\d+x\d+bb\./, '/600x600bb.'),
+    ebookIsbn: kind === 'ebook' ? (art.match(/\/(97[89]\d{10})\.\w+\//) || [])[1] || '' : '',
+    audioIsbn: kind === 'audio' ? (art.match(/\/(97[89]\d{10})\.\w+\//) || [])[1] || '' : '',
+    fromApple: true,
+  };
+}
+
+// Searches both at once (an ISBN goes to Open Library only). Apple's order leads, since it ranks
+// well; a book both know keeps Open Library's details, for its editions and author links, with
+// Apple's cover. Either one failing still leaves the other's results.
+async function findBooks(query) {
+  if (/^(97[89])?\d{9}[\dXx]$/.test(query.replace(/[\s-]/g, ''))) return olSearch(query);
+  const [ol, apple] = await Promise.allSettled([olSearch(query), appleSearch(query)]);
+  if (ol.status === 'rejected' && apple.status === 'rejected') throw ol.reason;
+  const olList = ol.value || [], out = [];
+  for (const a of apple.value || []) {
+    const i = olList.findIndex(o => sameBook(o, a));
+    if (i < 0) { out.push(a); continue; }
+    const o = olList.splice(i, 1)[0];
+    out.push({ ...o, subtitle: o.subtitle || a.subtitle, coverUrl: a.coverUrl || o.coverUrl, appleCover: a.coverUrl, ebookIsbn: a.ebookIsbn, audioIsbn: a.audioIsbn });
+  }
+  // Drop Apple-only listings whose title a higher-ranked result already has: cheap summaries
+  // and knock-offs of popular books ("Normal People" by DailysBooks), which rank below the real one.
+  const all = [...out, ...olList];
+  return all.filter((c, i) => !(c.fromApple && !c.workKey &&
+    all.slice(0, i).some(d => norm(d.title) === norm(c.title)))).slice(0, 30);
+}
+
+// A book found only by Apple's search may still be in Open Library under its title and author
+// (a bare "Redwood" has 2,572 matches there). Linking it brings editions and author links.
+async function linkToOpenLibrary(c) {
+  const found = await olSearch(`${c.title} ${surname(c.authors[0])}`).catch(() => []);
+  const o = found.find(x => sameBook(x, c));
+  if (!o) return c;
+  const keyFor = a => o.authorKeys[o.authors.findIndex(x => surname(x) === surname(a))] || '';
+  return { ...c, workKey: o.workKey, authorKeys: c.authors.map(keyFor),
+    year: o.year || c.year, pages: o.pages || c.pages, appleCover: c.coverUrl };
+}
+
 // A work's editions, English first then French, best-guess first: ones with an ISBN, then the
 // most complete (cover, pages, publisher), print before audio, then newest. Many editions have
 // no language recorded, so the ISBN's group fills in: 978-0/1 and 979-8 English, 978-2/979-10 French.
@@ -357,6 +436,7 @@ function editionFrom(e) {
     : langs.length ? '' : /^978[01]|^9798/.test(isbn) ? 'en' : /^9782|^97910/.test(isbn) ? 'fr' : '';
   const format = e.physical_format || '';
   const cover = e.covers?.[0] > 0 ? e.covers[0] : 0;
+  const reprint = /^9798/.test(isbn) || PRINT_ON_DEMAND.test((e.publishers || [])[0] || '');
   return {
     isbn, lang, format,
     publisher: (e.publishers || [])[0] || '',
@@ -365,11 +445,12 @@ function editionFrom(e) {
     coverUrl: cover ? `https://covers.openlibrary.org/b/id/${cover}-M.jpg` : '',
     score: (lang === 'en' ? 100 : 0) + (cover ? 4 : 0) + (e.number_of_pages ? 2 : 0) + (e.publishers ? 1 : 0)
       - (/audio|cassette|cd|mp3/i.test(format) ? 5 : 0)
-      - (/^9798/.test(isbn) || PRINT_ON_DEMAND.test((e.publishers || [])[0] || '') ? 10 : 0),
+      - (reprint ? 10 : 0),
+    reprint,
   };
 }
-// Self-published and print-on-demand reprints, common for classics: listed, never the best guess.
-const PRINT_ON_DEMAND = /independent|createspace|lulu|easy read|bibliolife|kessinger|forgotten books|nabu|wentworth|blurb|book on demand|books on demand|digireads|readaclassic|wildside|dodo press|echo library|general books|tredition|fq books|sheba blake/i;
+// Self-published, print-on-demand and large-print reprints: listed, never preselected.
+const PRINT_ON_DEMAND = /independent|diversified publishing|createspace|lulu|easy read|bibliolife|kessinger|forgotten books|nabu|wentworth|blurb|book on demand|books on demand|digireads|readaclassic|wildside|dodo press|echo library|general books|tredition|fq books|sheba blake/i;
 // The exact edition for a searched or scanned ISBN, for its publisher and pages.
 async function olEditionByIsbn(isbn) {
   const res = await fetch(`https://openlibrary.org/isbn/${isbn}.json`);
@@ -396,7 +477,7 @@ async function fillEditionSelect(sel, workKey, blank, preselectBest, currentIsbn
     const list = await olEditions(workKey);
     if (!sel.isConnected) return list;
     sel.innerHTML = `<option value="">${esc(blank)}</option>` + list.slice(0, 60).map((e, i) =>
-      `<option value="${i}" ${preselectBest && i === 0 ? 'selected' : ''}>${esc(editionLabel(e))}${e.isbn === currentIsbn ? ' (current)' : ''}</option>`).join('');
+      `<option value="${i}" ${preselectBest && i === 0 && !e.reprint ? 'selected' : ''}>${esc(editionLabel(e))}${e.isbn === currentIsbn ? ' (current)' : ''}</option>`).join('');
     if (!list.length) sel.innerHTML = '<option value="">Open Library lists no English or French edition with an ISBN</option>';
     sel.disabled = !list.length;
     return list;
@@ -1045,7 +1126,7 @@ function viewAdd(params) {
       const dup = findDuplicate(r);
       return `<div class="result">
         ${coverHtml(r)}
-        <div><div class="t">${esc(r.title)}</div><div class="a">${esc(r.authors.join(', '))}${r.year ? ' · ' + r.year : ''}</div></div>
+        <div><div class="t">${esc(r.title)}</div><div class="a">${esc(r.authors.join(', '))}${r.year ? ' · ' + r.year : ''}${r.fromApple && !r.workKey ? ' · Apple Books' : ''}</div></div>
         ${dup ? `<a class="btn small" href="#/book/${dup.id}">In collection</a>` : `<button class="btn small" data-pick="${i}">Add</button>`}
       </div>`;
     }).join('')}</div>`;
@@ -1064,6 +1145,7 @@ function viewAdd(params) {
       ${c.workKey && !c.isbn ? `<div class="row" style="margin-bottom:4px"><label class="field edition-field">Edition
           <select id="a-edition" disabled><option value="">Finding editions…</option></select></label></div>
         <p class="muted small" style="margin:0 0 12px">A best guess. Pick yours if it’s listed, or scan the barcode to get the exact one.</p>` : ''}
+      ${c.fromApple && !c.workKey ? `<p class="muted small" style="margin:0 0 12px">Found only in Apple Books, so there’s no publisher or page count. If you have the printed book, scanning its barcode adds its ISBN.</p>` : ''}
       <div class="row">
         <label class="field">Status<select id="a-status">${STATUSES.map(([v, l]) => `<option value="${v}" ${defaults.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <label class="field" id="a-yearField" ${defaults.status === 'read' ? '' : 'hidden'}>Year read<input type="text" id="a-year" inputmode="numeric" maxlength="4" placeholder="Unknown" style="width:6em"></label>
@@ -1081,7 +1163,7 @@ function viewAdd(params) {
         <button class="btn primary" type="submit">Search</button>
         <button class="btn" type="button" id="scanBtn">Scan barcode</button>
       </form>
-      <p class="muted small" style="margin:0 0 6px">Book details come from Open Library. Can’t find it? <button class="link-btn" id="manual">Type it in yourself</button></p>
+      <p class="muted small" style="margin:0 0 6px">Book details come from Open Library and Apple Books. Can’t find it? <button class="link-btn" id="manual">Type it in yourself</button></p>
       ${addState.chosen ? formHtml(addState.chosen) : ''}
       <div id="results">${addState.chosen ? '' : resultsHtml()}</div>`;
 
@@ -1095,7 +1177,11 @@ function viewAdd(params) {
     const manual = () => { addState.chosen = { title: '', authors: [], manual: true }; draw(); $('#m-title').focus(); };
     $('#manual').onclick = manual;
     $('#manual2') && ($('#manual2').onclick = manual);
-    document.querySelectorAll('[data-pick]').forEach(btn => btn.onclick = () => { addState.chosen = addState.results[btn.dataset.pick]; draw(); window.scrollTo(0, 0); });
+    document.querySelectorAll('[data-pick]').forEach(btn => btn.onclick = async () => {
+      let c = addState.results[btn.dataset.pick];
+      if (c.fromApple && !c.workKey) { btn.disabled = true; btn.textContent = '…'; c = await linkToOpenLibrary(c); }
+      addState.chosen = c; draw(); window.scrollTo(0, 0);
+    });
 
     if (addState.chosen) {
       $('#a-cancel').onclick = () => { addState.chosen = null; draw(); };
@@ -1104,7 +1190,7 @@ function viewAdd(params) {
       let editions = [], exact = null;
       const showCover = () => {
         const e = editions[edSel.value];
-        $('#addForm .cover').outerHTML = coverHtml({ ...c, coverUrl: e?.coverUrl || c.coverUrl });
+        $('#addForm .cover').outerHTML = coverHtml({ ...c, coverUrl: c.appleCover || e?.coverUrl || c.coverUrl });
       };
       if (edSel) {
         edSel.onchange = showCover;
@@ -1127,8 +1213,14 @@ function viewAdd(params) {
           const dup = findDuplicate(c);
           if (dup && !confirm(`“${dup.title}” is already in your collection. Add it again anyway?`)) return;
         }
-        const b = newBook({ ...c, manual: undefined, source: $('#a-source').value, shelves: $('#a-shelf')?.value ? [$('#a-shelf').value] : [] });
+        const { manual, fromApple, appleCover, ebookIsbn, audioIsbn, ...fields } = c;
+        const source = $('#a-source').value;
+        const b = newBook({ ...fields, source, shelves: $('#a-shelf')?.value ? [$('#a-shelf').value] : [] });
         if (edition) applyEdition(b, edition);
+        if (appleCover) b.coverUrl = appleCover;
+        // An ebook or audiobook has its own ISBN, which Apple's listing gives and editions don't.
+        if (/ebook/.test(source) && ebookIsbn) b.isbn = ebookIsbn;
+        if (/audio/.test(source) && audioIsbn) b.isbn = audioIsbn;
         setStatus(b, $('#a-status').value);
         if (yearRead) b.reads[0].year = yearRead;
         saveBook(b);
@@ -1144,7 +1236,7 @@ function viewAdd(params) {
     draw();
     $('#results').innerHTML = '<p class="muted">Searching…</p>';
     try {
-      addState.results = await olSearch(addState.q);
+      addState.results = await findBooks(addState.q);
       if (fromScan && addState.results.length === 1 && !findDuplicate(addState.results[0])) addState.chosen = addState.results[0];
       if (fromScan && !addState.results.length) addState.error = `Open Library doesn’t know ISBN ${addState.q}. Type the details in yourself instead.`;
     } catch (e) { addState.error = navigator.onLine ? e.message : 'You’re offline. Searching needs the internet, but you can type the book in yourself.'; }
