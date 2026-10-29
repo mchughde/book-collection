@@ -485,7 +485,7 @@ const GENRE_MAP = [
   [/historical fiction/i, 'Historical Fiction'], [/sci-?fi|science fiction/i, 'Science Fiction'], [/science history/i, 'Science & Nature'],
   [/political science/i, 'Politics, Government, Law and Public Policy'], [/social science|sociolog/i, 'Sociology'],
   [/\btravel/i, 'Travel'], [/biograph|memoir/i, 'Biography & Memoir'],
-  [/myster|crime|detective/i, 'Mystery'], [/thriller|suspense/i, 'Suspense & Thriller'],
+  [/myster|crime|detective|sleuth/i, 'Mystery'], [/thriller|suspense/i, 'Suspense & Thriller'],
   [/\bhistory\b/i, 'History'], [/philosoph/i, 'Philosophy'],
   [/religio|spiritual|christian|buddh|bible|theolog/i, 'Religion & Spirituality'],
   [/young adult|\bteen/i, 'Young Adult'], [/\bkids\b|child|juvenile/i, "Children's Books"],
@@ -509,11 +509,20 @@ function genresFrom(cats, fromApple) {
     const hit = GENRE_MAP.find(([re]) => re.test(cat));
     if (hit && !specific.includes(hit[1])) specific.push(hit[1]);
   }
-  // Apple puts its main category first, which decides Fiction or Nonfiction ("Sophie's World" is
-  // tagged both). Open Library has no main subject, so a "fiction" subject decides it there.
+  // Apple lists its main categories first, so the first one that says Fiction or Nonfiction
+  // decides ("Sophie's World" is tagged both). The first can be a niche one that says neither:
+  // "Murder in the Sentier" leads with "Women Sleuths", then "Crime & Thrillers". Open Library
+  // has no main subject, so a "fiction" subject decides it there.
   const fictiony = c => !/non-?fiction|true crime|criticism|studies/i.test(c) &&
-    /fiction|literature|myster|thriller|crime|romance|fantasy|classic|poetry|drama|short stor|comic/i.test(c);
-  const fiction = fromApple ? fictiony(cats[0]) : cats.some(c => /\bfiction\b/i.test(c) && !/non-?fiction/i.test(c));
+    /fiction|literature|myster|thriller|crime|sleuth|romance|fantasy|classic|poetry|drama|short stor|comic/i.test(c);
+  const side = c => {
+    if (fictiony(c)) return 'fiction';
+    const g = GENRE_MAP.find(([re]) => re.test(c))?.[1];
+    if (/non-?fiction/i.test(c) || (g && !FICTION_ONLY.includes(g) && g !== 'Young Adult' && g !== "Children's Books")) return 'nonfiction';
+    return null;
+  };
+  const fiction = fromApple ? cats.map(side).find(Boolean) === 'fiction'
+    : cats.some(c => /\bfiction\b/i.test(c) && !/non-?fiction/i.test(c));
   if (!fromApple && !fiction && !specific.length) return [];
   // Shop labels can contradict the main category (Apple files Normal People under Literary
   // Criticism too), so a novel drops study-only genres and nonfiction drops novel-only ones.
