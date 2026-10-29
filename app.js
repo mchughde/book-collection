@@ -408,11 +408,31 @@ async function fillEditionSelect(sel, workKey, blank, preselectBest, currentIsbn
 
 /* ---------- covers & cards ---------- */
 
+// Open Library's cover server sometimes fails, and Safari can keep reusing a failed answer.
+// Try twice more with a fresh address before showing the plain coloured cover. An ISBN cover
+// asked for with default=false fails on purpose when there's no cover, so it isn't retried.
+function coverFailed(img) {
+  const tries = Number(img.dataset.tries || 0);
+  if (tries < 2 && !img.src.includes('default=false')) {
+    img.dataset.tries = tries + 1;
+    img.style.visibility = 'hidden'; // no broken-image icon while waiting
+    img.onload = () => { img.style.visibility = ''; };
+    setTimeout(() => {
+      if (!img.isConnected) return;
+      const u = new URL(img.src);
+      u.searchParams.set('retry', Date.now());
+      img.src = u.href;
+    }, 1500 * (tries + 1));
+    return;
+  }
+  const box = img.parentNode;
+  if (box?.isConnected) box.outerHTML = box.dataset.blank;
+}
 function coverHtml(b, badge = '') {
   const hue = SPINES[[...(b.title || 'x')].reduce((n, c) => n + c.charCodeAt(0), 0) % SPINES.length];
   const blank = `<div class="cover blank" style="background:${hue}">${esc(b.title)}${badge}</div>`;
   if (!b.coverUrl) return blank;
-  return `<div class="cover"><img src="${esc(b.coverUrl)}" alt="" loading="lazy" onerror="this.parentNode.outerHTML=this.parentNode.dataset.blank" >${badge}</div>`
+  return `<div class="cover"><img src="${esc(b.coverUrl)}" alt="" loading="lazy" onerror="coverFailed(this)">${badge}</div>`
     .replace('<div class="cover">', `<div class="cover" data-blank="${esc(blank)}">`);
 }
 // Ratings go in half stars, 0.5 to 5 (0 = not rated).
