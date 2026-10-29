@@ -24,7 +24,7 @@ const SOURCES = [
   ['other', 'Other'],
 ];
 const SOURCE_LABEL = Object.fromEntries(SOURCES);
-// Where a book is kept (chosen with Dianne, 29 Oct 2026). Blank = not set yet. "Unfiled" is a
+// Where a book is kept (chosen 29 Oct 2026). Blank = not set yet. "Unfiled" is a
 // book that's here but not on a shelf; "Other" comes with its own words in locationOther.
 const LOCATIONS = [
   ['lounge', 'Lounge'], ['study-a', 'Study – bookcase A'], ['study-b', 'Study – bookcase B'],
@@ -423,7 +423,7 @@ function docToBook(d, isbn = '') {
 
 /* ---------- Apple Books ---------- */
 
-// Apple's public store search, Australian store (Dianne's choice, 29 Oct 2026): no key, open to
+// Apple's public store search, Australian store (chosen 29 Oct 2026): no key, open to
 // web pages, and far better than Open Library at new books and at ranking a bare title. It lists
 // ebooks and audiobooks, so no publisher, pages or print ISBN; but the cover's file name is
 // usually that ebook's or audiobook's own ISBN, which is kept for books she has in that form.
@@ -481,7 +481,7 @@ async function appleMatch(b) {
   return ((await res.json()).results || []).map(r => appleToBook(r, 'ebook')).find(x => sameBook(x, b)) || null;
 }
 
-// Apple's shop categories (or Open Library's subjects) translated into the genre names Dianne's
+// Apple's shop categories (or Open Library's subjects) translated into the genre names her
 // LibraryThing books use, so new books fit the same filters and charts. First match per category;
 // order matters ("Travel Essays & Memoirs" is Travel, "Historical Fiction" isn't History).
 const GENRE_MAP = [
@@ -2167,7 +2167,7 @@ function viewStocktake(arg) {
 
 /* ---------- LibraryThing import ---------- */
 
-// LibraryThing's JSON export: an object of books keyed by id. Dianne's (29 Oct 2026) has 267 books
+// LibraryThing's JSON export: an object of books keyed by id. Hers (29 Oct 2026) has 267 books
 // entered 2012–13, with no read status, dates or reviews, so books come in as Read, year unknown
 // (her choice). The export has no covers; Covers.run() looks them up afterwards.
 const TAG_FIXES = { autobigraphy: ['autobiography'], psycholgy: ['psychology'], 'London. United Kingdom': ['London', 'United Kingdom'] };
@@ -2176,7 +2176,7 @@ const plainText = s => { const t = document.createElement('textarea'); t.innerHT
 // Series come with their translations ("Ania z Zielonego Wzgórza", "La saga d'Anne", "Anne of
 // Green Gables"). Prefer a name with no accents or foreign words, then the most frequent, then the
 // most English-looking, then the first. "{Schama}" is LibraryThing telling series apart. Tested
-// on Dianne's export (29 Oct 2026): every multi-name series came out in English.
+// on her export (29 Oct 2026): every multi-name series came out in English.
 const FOREIGN_WORDS = new Set('z i e et la le les dai del de der die das und och og el los las il di da du komisario inspektor kolekcja juhtum juhtumid trylogia'.split(' '));
 const ENGLISH_WORDS = new Set('the of and in on to by for with inspector detective mystery mysteries series trilogy guide guides travel novels books chronicles adventures collection complete'.split(' '));
 function pickSeriesName(list) {
