@@ -80,14 +80,75 @@ function deviceName() {
 /* ---------- data ---------- */
 
 const emptyDb = () => ({ version: 1, books: {}, shelves: {}, authors: {}, dismissed: {} });
-let db = Object.assign(emptyDb(), recall('data') || {});
+// Filled from device storage by loadDb() before the first render and sync.
+let db = emptyDb();
+let loaded = false;
 
 const live = map => Object.values(map).filter(x => !x.deleted);
 const books = () => live(db.books);
 const shelves = () => live(db.shelves).sort((a, b) => a.name.localeCompare(b.name));
 const followed = () => live(db.authors).sort((a, b) => a.name.localeCompare(b.name));
 
-function persist() { store('data', db); }
+/* ---------- device storage ---------- */
+
+// The collection lives in IndexedDB. localStorage gives each site about 5 MB, and every
+// mchughde.github.io app shares that one allowance (Recipes keeps photos there), so a library
+// of hundreds of books could run out. Small settings stay in localStorage. If IndexedDB is
+// missing or fails, the collection falls back to localStorage, as it was before 29 Oct 2026.
+const Disk = {
+  ok: false, dbp: null,
+  open() {
+    return this.dbp ||= new Promise((ok, fail) => {
+      if (!globalThis.indexedDB) return fail(new Error('No IndexedDB'));
+      const req = indexedDB.open('bookcollection', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('kv');
+      req.onsuccess = () => ok(req.result);
+      req.onerror = () => fail(req.error);
+    });
+  },
+  async run(mode, fn) {
+    const idb = await this.open();
+    return new Promise((ok, fail) => {
+      const tx = idb.transaction('kv', mode);
+      const req = fn(tx.objectStore('kv'));
+      tx.oncomplete = () => ok(req.result);
+      tx.onerror = tx.onabort = () => fail(tx.error);
+    });
+  },
+  get(key) { return this.run('readonly', s => s.get(key)); },
+  put(key, value) { return this.run('readwrite', s => s.put(value, key)); },
+};
+
+// Moves a collection kept in localStorage into IndexedDB, checking the copy before freeing
+// the old one. If both exist (IndexedDB failed once and the fallback was used), they're merged.
+async function loadDb() {
+  try {
+    const old = recall('data');
+    let data = await Disk.get('data');
+    if (old) {
+      const want = data ? mergeDb(Object.assign(emptyDb(), data), Object.assign(emptyDb(), old)) : old;
+      await Disk.put('data', want);
+      data = await Disk.get('data');
+      if (canon(data) !== canon(want)) throw new Error('The copy didn’t match');
+      store('data', undefined);
+    }
+    Disk.ok = true;
+    return Object.assign(emptyDb(), data || {});
+  } catch {
+    return Object.assign(emptyDb(), recall('data') || {});
+  }
+}
+
+// One write at a time; changes made meanwhile are written straight after, latest only.
+let saving = false, saveAgain = false;
+function persist() {
+  if (!Disk.ok) { store('data', db); return; }
+  if (saving) { saveAgain = true; return; }
+  saving = true;
+  Disk.put('data', db)
+    .catch(() => { Disk.ok = false; store('data', db); })
+    .finally(() => { saving = false; if (saveAgain) { saveAgain = false; persist(); } });
+}
 function commit() { persist(); Sync.schedule(); }
 function saveBook(b) {
   b.updatedAt = now();
@@ -232,7 +293,8 @@ const Sync = {
 
   // Only one sync runs at a time. A request made meanwhile waits, then runs once more.
   async run() {
-    if (!this.cfg()) return;
+    // Never before the collection has loaded: merging into an empty one would lose unsynced edits.
+    if (!this.cfg() || !loaded) return;
     if (this.busy) { this.again = true; return new Promise(done => this.waiters.push(done)); }
     this.busy = true;
     do { this.again = false; await this.once(); } while (this.again);
@@ -252,7 +314,8 @@ const Sync = {
         persist();
         if (changedHere) refreshAfterSync();
         if (data && canon(merged) === canon(data)) break; // GitHub already has everything
-        const body = { message: `Update from ${deviceName()}`, content: b64encode(JSON.stringify(merged, null, 1)) };
+        // No indentation: about a third smaller to upload than the readable layout.
+        const body = { message: `Update from ${deviceName()}`, content: b64encode(JSON.stringify(merged)) };
         if (sha) body.sha = sha;
         const res = await this.api('/contents/' + DATA_FILE, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -1653,5 +1716,9 @@ if ('serviceWorker' in navigator) {
 }
 
 lastPath = location.hash.split('?')[0];
-render();
-Sync.run();
+loadDb().then(data => {
+  db = data;
+  loaded = true;
+  render();
+  Sync.run();
+});
