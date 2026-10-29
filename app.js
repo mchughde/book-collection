@@ -428,11 +428,16 @@ function coverFailed(img) {
   const box = img.parentNode;
   if (box?.isConnected) box.outerHTML = box.dataset.blank;
 }
+// The web address inside whatever was pasted: copying a picture can bring invisible
+// placeholder characters (U+FFFC) along with its address.
+const cleanUrl = s => (String(s || '').match(/https?:\/\/[^\s\uFFFC]+/) || [''])[0];
+
 function coverHtml(b, badge = '') {
   const hue = SPINES[[...(b.title || 'x')].reduce((n, c) => n + c.charCodeAt(0), 0) % SPINES.length];
   const blank = `<div class="cover blank" style="background:${hue}">${esc(b.title)}${badge}</div>`;
-  if (!b.coverUrl) return blank;
-  return `<div class="cover"><img src="${esc(b.coverUrl)}" alt="" loading="lazy" onerror="coverFailed(this)">${badge}</div>`
+  const url = cleanUrl(b.coverUrl);
+  if (!url) return blank;
+  return `<div class="cover"><img src="${esc(url)}" alt="" loading="lazy" onerror="coverFailed(this)">${badge}</div>`
     .replace('<div class="cover">', `<div class="cover" data-blank="${esc(blank)}">`);
 }
 // Ratings go in half stars, 0.5 to 5 (0 = not rated).
@@ -925,7 +930,14 @@ function viewBook(id) {
   view.querySelectorAll('[data-untag]').forEach(x => x.onclick = () => { b.tags = b.tags.filter(t => t !== x.dataset.untag); save(); render(); });
 
   for (const f of ['title', 'subtitle', 'year', 'pages', 'isbn', 'publisher', 'coverUrl']) {
-    $('#d-' + f).onchange = e => { b[f] = e.target.value.trim(); save(); if (f === 'title' || f === 'coverUrl') render(); };
+    $('#d-' + f).onchange = e => {
+      let v = e.target.value.trim();
+      if (f === 'coverUrl' && v) {
+        v = cleanUrl(v);
+        if (!v) { toast('That isn’t a web address. Copy the picture’s address, starting https://'); e.target.value = b.coverUrl; return; }
+      }
+      b[f] = v; save(); if (f === 'title' || f === 'coverUrl') render();
+    };
   }
   $('#d-authors').onchange = e => {
     const names = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
