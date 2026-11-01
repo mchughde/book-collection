@@ -1,5 +1,5 @@
 // The global pre-commit hook bumps this version on every commit.
-const CACHE_NAME = 'books-v30';
+const CACHE_NAME = 'books-v31';
 
 const SHELL = [
   './', 'index.html', 'styles.css?v=1', 'manifest.json',

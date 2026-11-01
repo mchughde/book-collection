@@ -43,7 +43,7 @@ function coverHtml(b, badge = '') {
 }
 /* ---------- cover photos ---------- */
 
-// A photo taken of a book's cover (1 Nov 2026, Dianne's request, for stocktakes that turn up
+// A photo taken of a book's cover (1 Nov 2026, her request, for stocktakes that turn up
 // missing or wrong covers). It's cropped and shrunk on the device, then kept as its own JPEG:
 // in IndexedDB as `photo:<path>`, and in the data repo at covers/<book id>-<time>.jpg, so
 // library.json stays small. The book's coverPhoto names the file and wins over coverUrl;

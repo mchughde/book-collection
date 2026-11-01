@@ -11,3 +11,11 @@ if ! node tests/check.mjs >&2; then
   echo "Push stopped: some checks failed, so this version was NOT put live." >&2
   exit 1
 fi
+# This repo is public: refuse a version whose files contain the owner's name. The name is read
+# from this Mac (as Apps Check-up does), so it never has to be written here.
+args=""
+for w in $(id -F); do [ ${#w} -gt 2 ] && args="$args -e $w"; done
+if [ -n "$args" ] && git grep -n -i -w $args HEAD -- . >&2; then
+  echo "Push stopped: the lines above show your name, and this repo is public. Reword them (e.g. \"her request\") and commit again." >&2
+  exit 1
+fi
