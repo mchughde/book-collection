@@ -1,8 +1,10 @@
 // The global pre-commit hook bumps this version on every commit.
-const CACHE_NAME = 'books-v29';
+const CACHE_NAME = 'books-v30';
 
 const SHELL = [
-  './', 'index.html', 'styles.css?v=1', 'app.js?v=1', 'manifest.json',
+  './', 'index.html', 'styles.css?v=1', 'manifest.json',
+  'js/core.js', 'js/sync.js', 'js/lookup.js', 'js/covers.js', 'js/lists.js', 'js/book.js', 'js/add.js',
+  'js/discover.js', 'js/stats.js', 'js/settings.js', 'js/stocktake.js', 'js/librarything.js', 'js/start.js',
   'icon-192.png', 'icon-512.png', 'apple-touch-icon.png',
   'vendor/zxing-0.21.3.min.js',
 ];

@@ -1,4 +1,4 @@
-// A pretend browser for the check suite: runs app.js in jsdom with a pretend GitHub and canned
+// A pretend browser for the check suite: runs the app's scripts in jsdom with a pretend GitHub and canned
 // Open Library / Apple answers. Nothing here ever touches the network: any request the fakes
 // don't recognise is answered with an error and recorded, and the check that caused it fails.
 import fs from 'node:fs';
@@ -6,15 +6,25 @@ import vm from 'node:vm';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 
-const ROOT = new URL('../', import.meta.url);
-const APP_FILE = process.env.APP ? new URL(process.env.APP, 'file://' + process.cwd() + '/') : new URL('app.js', ROOT);
-export const appCode = fs.readFileSync(APP_FILE, 'utf8');
-export const appFile = APP_FILE.pathname;
-const pageHtml = fs.readFileSync(new URL('index.html', ROOT), 'utf8').replace(/<script src="app\.js[^"]*"><\/script>/, '');
+// The app folder: this project, or another copy of it (APP_DIR=…), used to prove the checks
+// catch breakage without touching the real files. The app's scripts are the ones index.html
+// loads, in its order, so the checks follow the page if files are added or renamed.
+const ROOT = process.env.APP_DIR ? new URL(process.env.APP_DIR.replace(/\/?$/, '/'), 'file://' + process.cwd() + '/') : new URL('../', import.meta.url);
+export const appFile = ROOT.pathname;
+const indexHtml = fs.readFileSync(new URL('index.html', ROOT), 'utf8');
+const SCRIPT_TAG = /<script src="([^"?]+)[^"]*"><\/script>/g;
+const appScripts = [...indexHtml.matchAll(SCRIPT_TAG)].map(m => ({ name: m[1], code: fs.readFileSync(new URL(m[1], ROOT), 'utf8') }));
+if (!appScripts.length) throw new Error('index.html loads no scripts');
+const pageHtml = indexHtml.replace(SCRIPT_TAG, '');
 
 // The pretend data repo. Deliberately not mchughde/book-collection-data.
 export const OWNER = 'test-owner', REPO = 'test-data', TOKEN = 'github_pat_test';
 const realRepo = /mchughde\/book-collection-data/;
+
+// Errors in the app's background work (a promise that fails with nobody to catch it). In a real
+// browser they'd show in the console; here they fail the check that was running.
+export const strayErrors = [];
+process.on('unhandledRejection', e => strayErrors.push('background error: ' + (e?.stack || e).toString().split('\n').slice(0, 2).join(' — ')));
 
 export const sleep = ms => new Promise(r => setTimeout(r, ms));
 export async function until(cond, what = 'condition', ms = 3000) {
@@ -187,8 +197,14 @@ export async function openDevice({ name = 'Mac', ua = 'Macintosh', github = null
     return res;
   };
 
-  // Run as a script (not eval) so its top-level let/const are visible to later w.eval calls.
-  vm.runInContext(appCode + '\n;globalThis.__setDb = v => { db = v; };', dom.getInternalVMContext(), { filename: 'app.js' });
+  // Run as scripts (not eval) so their top-level let/const are visible to later w.eval calls.
+  // Each file runs as its own script, as in the browser, so they share one scope the same way.
+  const ctx = dom.getInternalVMContext();
+  // A real browser downloads each file before running it, so the app's start-up (loading the
+  // collection) can get going before later files arrive. Pausing between files does the same here,
+  // so a file loaded too early is caught.
+  for (const f of appScripts) { vm.runInContext(f.code, ctx, { filename: f.name }); await sleep(3); }
+  vm.runInContext('globalThis.__setDb = v => { db = v; };', ctx);
   const dev = {
     name, window: w, document: w.document, errors, requests, github,
     js: src => w.eval(src),

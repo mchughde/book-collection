@@ -1,7 +1,7 @@
-// Book Collection check suite. Runs the real app.js in a pretend browser, with a pretend GitHub
+// Book Collection check suite. Runs the real app (the scripts index.html loads) in a pretend browser, with a pretend GitHub
 // and canned Open Library / Apple answers, and checks the main things the app does.
 //   node tests/check.mjs            (from the project folder; first time: cd tests && npm install)
-//   APP=some/other/app.js node tests/check.mjs   checks a different copy of app.js
+//   APP_DIR=path/to/a/copy node tests/check.mjs   checks another copy of the app folder
 // Never touches the real data repo or the internet.
 let H;
 try { H = await import('./harness.mjs'); } catch (e) {
@@ -9,7 +9,7 @@ try { H = await import('./harness.mjs'); } catch (e) {
   console.log('The test tools aren’t installed yet. Run this once, then try again:\n  cd tests && npm install');
   process.exit(2);
 }
-const { openDevice, FakeGitHub, until, sleep, syncCfg, TOKEN, OWNER, REPO, appFile } = H;
+const { openDevice, FakeGitHub, until, sleep, syncCfg, TOKEN, OWNER, REPO, appFile, strayErrors } = H;
 
 const checks = [];
 const check = (name, fn) => checks.push({ name, fn });
@@ -553,9 +553,11 @@ for (const c of todo) {
   let why = '';
   try {
     await Promise.race([c.fn(), sleep(20000).then(() => { throw new Fail('took longer than 20 seconds'); })]);
-    const errs = opened.flatMap(d => d.errors);
+    await sleep(5);
+    const errs = [...opened.flatMap(d => d.errors), ...strayErrors.splice(0)];
     if (errs.length) why = 'the app reported errors:\n        ' + errs.join('\n        ');
   } catch (e) {
+    strayErrors.length = 0;
     why = e instanceof Fail ? e.message : (e.stack || String(e)).split('\n').slice(0, 4).join('\n        ');
   }
   opened.forEach(d => d.close());
