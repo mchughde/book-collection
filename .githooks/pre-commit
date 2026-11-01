@@ -1,0 +1,6 @@
+#!/bin/sh
+# This repo has its own hooks folder (for pre-push), which would skip the global hook, so call it:
+# it scans for secrets and bumps the cache name in sw.js.
+global="$HOME/.git-hooks/pre-commit"
+if [ -x "$global" ]; then exec "$global" "$@"; fi
+exit 0

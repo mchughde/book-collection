@@ -1,0 +1,13 @@
+#!/bin/sh
+# Runs the check suite before anything is pushed. A push to main puts the app live on GitHub
+# Pages, so a version that fails the checks is stopped here, whoever (or whatever) pushes it.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+if [ ! -d tests/node_modules ]; then
+  echo "Push stopped: the test tools aren't installed on this Mac. Run: cd tests && npm install" >&2
+  exit 1
+fi
+echo "Running the Book Collection checks before pushing…" >&2
+if ! node tests/check.mjs >&2; then
+  echo "Push stopped: some checks failed, so this version was NOT put live." >&2
+  exit 1
+fi
