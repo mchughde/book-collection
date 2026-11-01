@@ -332,3 +332,12 @@ code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-
 .pe-h.sw { left: -15px; bottom: -15px; cursor: nesw-resize; }
 .pe-h.se { right: -15px; bottom: -15px; cursor: nwse-resize; }
 .pe-bar { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 14px 16px 18px; }
+
+/* ---------- LibraryThing cover comparison ---------- */
+.ltc-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.ltc-row input { flex: none; width: 20px; height: 20px; }
+.ltc-pic { display: flex; flex-direction: column; gap: 4px; width: 84px; flex: none; text-align: center; }
+.ltc-pic .cover { width: 84px; }
+.ltc-pic .cover.blank { font-size: .6rem; padding: 4px; }
+.ltc-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 420px) { .ltc-row { gap: 8px; } .ltc-pic, .ltc-pic .cover { width: 66px; } }
