@@ -207,6 +207,38 @@ const allTags = () => [...new Set(books().flatMap(b => b.tags || []))].sort((a, 
 const allGenres = () => [...new Set(books().flatMap(b => b.genres || []))].sort((a, b) => a.localeCompare(b));
 const allSeries = () => [...new Set(books().map(b => b.series).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
+// Genres as removable chips, with a menu of the genres already in the collection and
+// "New genre…" for one that isn't there yet. `note` shows while there are none (e.g. still finding them).
+function genrePickerHtml(id, chosen, note = '') {
+  const others = allGenres().filter(g => !chosen.includes(g));
+  return `<div class="tags" id="${id}">${chosen.map(g => `<span class="tag">${esc(g)}<button type="button" data-ungenre="${esc(g)}" aria-label="Remove genre ${esc(g)}">×</button></span>`).join('')}
+    ${!chosen.length && note ? `<span class="muted small">${esc(note)}</span>` : ''}
+    <select aria-label="Add a genre"><option value="">Add a genre…</option>${others.map(g => `<option>${esc(g)}</option>`).join('')}<option value="+new">New genre…</option></select>
+    <input type="text" placeholder="Type a new genre" hidden style="width:11em"></div>`;
+}
+// Typed genres that match an existing one apart from capitals use the existing spelling.
+const typedGenres = text => text.split(',').map(s => s.trim()).filter(Boolean)
+  .map(g => allGenres().find(x => x.toLowerCase() === g.toLowerCase()) || g);
+function wireGenrePicker(box, chosen, onChange) {
+  const sel = box.querySelector('select'), input = box.querySelector('input');
+  const add = names => onChange([...new Set([...chosen, ...names])]);
+  sel.onchange = () => {
+    if (sel.value === '+new') { sel.hidden = true; input.hidden = false; input.focus(); }
+    else if (sel.value) add([sel.value]);
+  };
+  const addTyped = () => {
+    const names = typedGenres(input.value);
+    if (names.length) add(names);
+    else { input.hidden = true; sel.hidden = false; sel.value = ''; }
+  };
+  input.onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); addTyped(); }
+    if (e.key === 'Escape') { input.value = ''; addTyped(); }
+  };
+  input.onchange = addTyped;
+  box.querySelectorAll('[data-ungenre]').forEach(x => x.onclick = () => onChange(chosen.filter(g => g !== x.dataset.ungenre)));
+}
+
 function findDuplicate(c) {
   const t = norm(c.title), a = norm((c.authors || [])[0]);
   return books().find(b =>
@@ -1120,7 +1152,7 @@ function viewBook(id) {
             ${detailField('year', 'Year')}${detailField('pages', 'Pages', 'numeric')}${detailField('isbn', 'ISBN', 'numeric')}
             ${detailField('publisher', 'Publisher')}${detailField('coverUrl', 'Cover image web address')}
             ${detailField('series', 'Series')}${detailField('seriesNo', 'Number in series', 'decimal')}
-            <label class="field">Genres (comma between)<input type="text" id="d-genres" value="${esc((b.genres || []).join(', '))}"></label>
+            <div class="field" style="grid-column:1/-1">Genres${genrePickerHtml('d-genres', b.genres || [])}</div>
           </div>
           ${b.workKey ? `<div class="row" style="margin:12px 0 0" id="editionRow">
             <button class="btn small" id="pickEdition">${b.isbn ? 'Change edition' : 'Choose edition'}</button>
@@ -1264,10 +1296,7 @@ function viewBook(id) {
       b[f] = v; save(); if (['title', 'coverUrl', 'series', 'seriesNo'].includes(f)) render();
     };
   }
-  $('#d-genres').onchange = e => {
-    b.genres = [...new Set(e.target.value.split(',').map(s => s.trim()).filter(Boolean))];
-    save(); render();
-  };
+  wireGenrePicker($('#d-genres'), b.genres || [], g => { b.genres = g; save(); render(); });
   $('#d-authors').onchange = e => {
     const names = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
     // Keep each Open Library author link only while the name is unchanged.
@@ -1397,8 +1426,8 @@ function viewAdd(params) {
       ${c.workKey && !c.isbn ? `<div class="row" style="margin-bottom:4px"><label class="field edition-field">Edition
           <select id="a-edition" disabled><option value="">Finding editions…</option></select></label></div>
         <p class="muted small" style="margin:0 0 12px">A best guess. Pick yours if it’s listed, or scan the barcode to get the exact one.</p>` : ''}
-      ${c.manual ? '' : `<div class="row" style="margin-bottom:4px"><label class="field edition-field">Genres (comma between)
-          <input type="text" id="a-genres" placeholder="Finding genres…"></label></div>`}
+      ${c.manual ? '' : `<div class="row" style="margin-bottom:12px"><div class="field edition-field">Genres
+          ${genrePickerHtml('a-genres', [], 'Finding genres…')}</div></div>`}
       ${c.fromApple && !c.workKey ? `<p class="muted small" style="margin:0 0 12px">Found only in Apple Books, so there’s no publisher or page count. If you have the printed book, scanning its barcode adds its ISBN.</p>` : ''}
       <div class="row">
         <label class="field">Status<select id="a-status">${STATUSES.map(([v, l]) => `<option value="${v}" ${defaults.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -1453,13 +1482,22 @@ function viewAdd(params) {
         fillEditionSelect(edSel, c.workKey, 'No particular edition', true).then(list => { editions = list; if (edSel.isConnected) showCover(); });
       }
       if (c.isbn) olEditionByIsbn(c.isbn).then(e => { exact = e; }).catch(() => {});
-      // Genres arrive a moment later; a box already typed in is left alone.
-      const gBox = $('#a-genres');
-      if (gBox) guessGenres(c).then(g => {
-        if (!gBox.isConnected || gBox.value) return;
-        gBox.value = g.join(', ');
-        gBox.placeholder = g.length ? '' : 'None found. Type some, or leave blank';
-      }).catch(() => { gBox.placeholder = ''; });
+      // Genres arrive a moment later; once she has picked or removed one, the guess is left out.
+      let addGenres = [], genresTouched = false;
+      const drawGenres = note => {
+        const box = $('#a-genres');
+        if (!box) return;
+        box.outerHTML = genrePickerHtml('a-genres', addGenres, note);
+        wireGenrePicker($('#a-genres'), addGenres, g => { addGenres = g; genresTouched = true; drawGenres(); });
+      };
+      if ($('#a-genres')) {
+        drawGenres('Finding genres…');
+        guessGenres(c).then(g => {
+          if (genresTouched) return;
+          addGenres = g;
+          drawGenres(g.length ? '' : 'None found. Pick some, or leave blank');
+        }).catch(() => { if (!genresTouched) drawGenres(); });
+      }
       $('#a-status').onchange = e => {
         $('#a-yearField').hidden = e.target.value !== 'read';
         $('#a-locField').hidden = e.target.value === 'wishlist';
@@ -1488,13 +1526,14 @@ function viewAdd(params) {
           if (dup && !confirm(`“${dup.title}” is already in your collection. Add it again anyway?`)) return;
         }
         const { manual, fromApple, appleCover, ebookIsbn, audioIsbn, appleGenres, ...fields } = c;
-        const typedGenres = ($('#a-genres')?.value || '').split(',').map(g => g.trim()).filter(Boolean);
+        // Includes a new genre typed but not yet confirmed with Return.
+        const genres = [...addGenres, ...typedGenres($('#a-genres input')?.value || '')];
         const source = $('#a-source').value;
         // Not called `location`: that would hide window.location, used below to open the book.
         const place = $('#a-locField').hidden ? '' : $('#a-location').value;
         const locationOther = place === 'other' ? $('#a-locationOther').value.trim() : '';
         if (place && place !== 'other' && placeKind(source)) store('addPlace', { ...recall('addPlace'), [placeKind(source)]: place });
-        const b = newBook({ ...fields, source, location: place, locationOther, genres: [...new Set(typedGenres)], shelves: $('#a-shelf')?.value ? [$('#a-shelf').value] : [] });
+        const b = newBook({ ...fields, source, location: place, locationOther, genres: [...new Set(genres)], shelves: $('#a-shelf')?.value ? [$('#a-shelf').value] : [] });
         if (edition) applyEdition(b, edition);
         if (appleCover) b.coverUrl = appleCover;
         // An ebook or audiobook has its own ISBN, which Apple's listing gives and editions don't.

@@ -152,7 +152,7 @@ input[type=text], input[type=search], input[type=url], input[type=number], input
 }
 textarea { width: 100%; resize: vertical; line-height: 1.5; }
 input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent-strong) 45%, transparent); outline-offset: 0; border-color: var(--accent-strong); }
-label.field { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; color: var(--ink-2); }
+label.field, div.field { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; color: var(--ink-2); }
 
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
 .toolbar select { max-width: 15em; }
