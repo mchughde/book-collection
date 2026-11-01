@@ -2150,6 +2150,8 @@ function viewSettings() {
       </div>
       <p class="muted small">Your key is on LibraryThing’s API page while you’re signed in (librarything.com/api). It’s used once for this and not kept.</p>
       <div class="row"><button class="btn" id="ltCoverGo">Compare covers</button><span id="ltCoverMsg" class="small"></span></div>
+      <p class="muted small">If LibraryThing says your books are private, load your catalogue pages instead: signed in to LibraryThing in Safari, open librarything.com/catalog_bottom.php?view=<i>your user name</i>, then File → Save As…, Format: Page Source, for each page of books.</p>
+      <div class="row"><label class="btn">Load saved catalogue pages<input type="file" id="ltPages" accept=".html,.htm,text/html" multiple hidden></label></div>
       <div id="ltCoverBox"></div>` : ''}
     </section>
     <section>
@@ -2220,16 +2222,13 @@ function viewSettings() {
       };
     } catch (err) { box.innerHTML = `<p style="color:var(--err)">${esc(err.message)}</p>`; }
   };
-  if ($('#ltCoverGo')) $('#ltCoverGo').onclick = async () => {
-    const user = $('#lt-user').value.trim(), key = $('#lt-key').value.trim();
+  const compareLtCovers = async getCovers => {
     const msg = $('#ltCoverMsg'), box = $('#ltCoverBox'), btn = $('#ltCoverGo');
-    if (!user || !key) { msg.textContent = 'Fill in both.'; return; }
-    store('ltUser', user);
     btn.disabled = true; box.innerHTML = '';
-    msg.textContent = 'Asking LibraryThing…';
     let r;
     try {
-      r = await LtCovers.check(user, key, (done, total) => { msg.textContent = `Comparing covers: ${done} of ${total}…`; });
+      const covers = await getCovers();
+      r = await LtCovers.check(covers, (done, total) => { msg.textContent = `Comparing covers: ${done} of ${total}…`; });
     } catch (e) { msg.innerHTML = `<span style="color:var(--err)">${esc(e.message)}</span>`; btn.disabled = false; return; }
     btn.disabled = false; msg.textContent = '';
     const list = [...r.sharp, ...r.small];
@@ -2240,7 +2239,7 @@ function viewSettings() {
     const n = (k, one, many) => k ? `<li>${k} ${k === 1 ? one : many}</li>` : '';
     box.innerHTML = `<div class="panel">
       <p style="margin-top:0"><strong>${r.total} books from LibraryThing.</strong></p>
-      <ul class="small">${n(r.sharp.length, 'with a LibraryThing cover that looks as sharp as your others (ticked)', 'with a LibraryThing cover that looks as sharp as your others (ticked)')}${n(r.small.length, 'with a small LibraryThing cover that may look blurry (not ticked)', 'with a small LibraryThing cover that may look blurry (not ticked)')}${n(r.same.length, 'already has its LibraryThing cover', 'already have their LibraryThing cover')}${n(r.none.length, 'has no cover in LibraryThing, so it keeps its own', 'have no cover in LibraryThing, so they keep theirs')}${n(r.photo.length, 'has your own photo as the cover, so it’s left alone', 'have your own photo as the cover, so they’re left alone')}${n(r.missing.length, 'isn’t in your LibraryThing catalogue any more', 'aren’t in your LibraryThing catalogue any more')}</ul>
+      <ul class="small">${n(r.sharp.length, 'with a LibraryThing cover that looks as sharp as your others (ticked)', 'with a LibraryThing cover that looks as sharp as your others (ticked)')}${n(r.small.length, 'with a small LibraryThing cover that may look blurry (not ticked)', 'with a small LibraryThing cover that may look blurry (not ticked)')}${n(r.same.length, 'already has its LibraryThing cover', 'already have their LibraryThing cover')}${n(r.none.length, 'has no cover in LibraryThing, so it keeps its own', 'have no cover in LibraryThing, so they keep theirs')}${n(r.photo.length, 'has your own photo as the cover, so it’s left alone', 'have your own photo as the cover, so they’re left alone')}${n(r.missing.length, 'wasn’t found in LibraryThing (if you loaded saved pages, it may be on a page you didn’t load)', 'weren’t found in LibraryThing (if you loaded saved pages, they may be on a page you didn’t load)')}</ul>
       ${list.length ? `<p class="small">Untick any where your current cover is the right one. Px is the picture’s width: under 180 looks soft.</p>
       ${r.sharp.length ? `<h3>Sharp</h3>${r.sharp.map((t, i) => row(t, i)).join('')}` : ''}
       ${r.small.length ? `<h3>Small</h3>${r.small.map((t, i) => row(t, i + r.sharp.length)).join('')}` : ''}
@@ -2259,6 +2258,26 @@ function viewSettings() {
       $('#lt-key').value = '';
       toast(`${chosen.length} cover${chosen.length === 1 ? '' : 's'} changed to your LibraryThing ones`, 4000);
     };
+  };
+  if ($('#ltCoverGo')) $('#ltCoverGo').onclick = () => {
+    const user = $('#lt-user').value.trim(), key = $('#lt-key').value.trim();
+    if (!user || !key) { $('#ltCoverMsg').textContent = 'Fill in both.'; return; }
+    store('ltUser', user);
+    $('#ltCoverMsg').textContent = 'Asking LibraryThing…';
+    compareLtCovers(() => LtCovers.load(user, key));
+  };
+  if ($('#ltPages')) $('#ltPages').onchange = e => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    if (!files.length) return;
+    $('#ltCoverMsg').textContent = 'Reading the pages…';
+    compareLtCovers(async () => {
+      const covers = LtCovers.fromPages(await Promise.all(files.map(f => f.text())));
+      const n = Object.keys(covers).length;
+      if (!n) throw new Error('Those files have no LibraryThing books in them. Save the page at catalog_bottom.php, in Covers view.');
+      toast(`${n} covers found in ${files.length} page${files.length === 1 ? '' : 's'}`);
+      return covers;
+    });
   };
   $('#import').onchange = async e => {
     const file = e.target.files[0];
@@ -2619,7 +2638,7 @@ const LtCovers = {
         const covers = {};
         for (const b of Object.values(data.books)) {
           const url = String(b?.cover || '');
-          if (b?.book_id && /^https:\/\/[^\s"'<>]+$/.test(url)) covers[String(b.book_id)] = url;
+          if (b?.book_id && /^https:\/\/[^\s"'<>]+$/.test(url)) covers[String(b.book_id)] = this.big(url);
         }
         finish(true, covers);
       };
@@ -2639,6 +2658,24 @@ const LtCovers = {
     if (/pics\.cdn\.librarything\.com/.test(url)) return url.replace(/-h\d+-w\d+-/, '-h1000-w600-');
     return url;
   },
+  // The other way in, since the API kept calling her catalogue private even once she'd made it
+  // public (1 Nov 2026): her catalogue's book list saved from Safari as Page Source
+  // (catalog_bottom.php?view=<user>, 90 books a page, Covers view). Each book is a
+  // .cover-grid-item with data-books-id; its srcset's last entry is the largest size.
+  fromPages(texts) {
+    const covers = {};
+    for (const text of texts) {
+      const page = new DOMParser().parseFromString(text, 'text/html');
+      for (const item of page.querySelectorAll('[data-books-id]')) {
+        const img = item.querySelector('img');
+        if (!img) continue;
+        const sizes = (img.getAttribute('srcset') || '').split(',').map(x => x.trim().split(/\s+/)[0]).filter(Boolean);
+        const url = sizes.pop() || img.getAttribute('src') || '';
+        if (/^https:\/\/[^\s"'<>]+$/.test(url)) covers[item.dataset.booksId] = url;
+      }
+    }
+    return covers;
+  },
   // Width of a picture, 0 if it doesn't load (Amazon sends a 1×1 picture for none).
   width(url) {
     return new Promise(resolve => {
@@ -2653,8 +2690,7 @@ const LtCovers = {
   // Sorts her imported books into: a sharp LibraryThing cover (at least Open Library's 180 px),
   // a small one, none (LibraryThing's "no cover" pictures are the same file for many books),
   // the same as now, a photo she took (left alone), or not in LibraryThing any more.
-  async check(user, key, progress) {
-    const covers = await this.load(user, key);
+  async check(covers, progress) {
     const count = {};
     Object.values(covers).forEach(u => { count[u] = (count[u] || 0) + 1; });
     const out = { sharp: [], small: [], none: [], same: [], photo: [], missing: [], total: 0 };
@@ -2665,8 +2701,8 @@ const LtCovers = {
       if (!lt) out.missing.push(b);
       else if (b.coverPhoto) out.photo.push(b);
       else if (count[lt] >= 5 || /\/picsizes\/00\/.*\.png$/.test(lt)) out.none.push(b);
-      else if (cleanUrl(b.coverUrl) === this.big(lt)) out.same.push(b);
-      else todo.push({ b, url: this.big(lt) });
+      else if (cleanUrl(b.coverUrl) === lt) out.same.push(b);
+      else todo.push({ b, url: lt });
     }
     let done = 0;
     const total = todo.length;
