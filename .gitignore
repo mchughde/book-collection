@@ -2,3 +2,4 @@ CLAUDE.md
 .claude/
 dev/
 .DS_Store
+tests/node_modules/
